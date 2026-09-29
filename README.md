@@ -17,6 +17,9 @@ Inspirat de HeyClicky, construit pentru uz personal și fără costuri fixe:
 
 - **Întreabă** (ține apăsat ⌃⌥): captură de ecran în momentul eliberării tastelor, răspuns în streaming, citit cu voce propoziție cu propoziție.
 - **Arată**: cursorul Macky zboară spre butonul potrivit, iar Accessibility îl „lipește” de controlul real și îl evidențiază. Poate arăta și mai mulți pași la rând.
+- **Încercuiește**: cât ții apăsat ⌃⌥, poți desena cu mouse-ul pe ecran ca să arăți la ce te referi („ce e asta?”).
+- **Face în locul tău**: „apasă tu pe Export”, „caută pisici pe YouTube”. Macky dă click, scrie și apasă taste, câte un pas, verificând ecranul după fiecare. Implicit te întreabă înainte de fiecare acțiune.
+- **Notch**: panoul coboară din notch când duci mouse-ul acolo; cât lucrează, Macky arată un indicator lângă notch.
 - **Dictează** (ține apăsat ⌃⇧): transcrie local și lipește textul în orice aplicație. Nu folosește AI, deci nu costă nimic.
 - **Întrerupere**: o nouă apăsare oprește imediat răspunsul curent.
 - **Conversație**: ține minte ultimele replici; doar întrebarea curentă trimite captura, ca să coste puțin.

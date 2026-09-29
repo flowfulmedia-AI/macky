@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A panel that can receive keyboard input (for the question text field) without
 /// activating Macky or pulling focus from the app the user is working in.
-final class KeyablePanel: NSPanel {
+class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 

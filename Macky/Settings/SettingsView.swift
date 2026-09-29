@@ -102,6 +102,12 @@ private struct OpenRouterSettingsTab: View {
                 }
             }
 
+            Section("Viteză") {
+                Toggle("Răspunsuri rapide: modelul nu mai „gândește” înainte să răspundă", isOn: $settings.disableModelReasoning)
+                Text("Economisește câteva secunde la fiecare pas. Modelele care nu permit asta sunt detectate automat și folosite normal.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
             Section("Indicare pe ecran") {
                 Picker("Coordonate", selection: $settings.coordinateConventionChoice) {
                     ForEach(CoordinateConventionChoice.allCases) { choice in Text(choice.displayName).tag(choice) }
@@ -294,6 +300,7 @@ private struct GeneralSettingsTab: View {
                 }
                 Text("Spune de exemplu „apasă tu pe Export” sau „caută pisici pe YouTube”. Macky face câte un pas, verifică pe ecran și continuă. O nouă apăsare pe scurtătură îl oprește imediat. Funcționează doar cu modele care „arată prin tool”.")
                     .font(.caption).foregroundColor(.secondary)
+                Toggle("Comenzi instant, fără AI: „pauză”, „următoarea melodie”, „deschide Safari”", isOn: $settings.quickCommandsEnabled)
                 Toggle("Desenează pe ecran cât ții apăsată scurtătura (încercuiește ce vrei să întrebi)", isOn: $settings.drawingEnabled)
             }
 

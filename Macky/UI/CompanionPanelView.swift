@@ -175,6 +175,11 @@ struct CompanionPanelView: View {
             Text(costSummary)
                 .font(.caption)
                 .foregroundColor(.secondary)
+            if let lastTimingSummary = session.lastTimingSummary {
+                Text(lastTimingSummary)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             HStack(spacing: 14) {
                 footerButton("Setări", systemImage: "gearshape", action: openSettings)
                 footerButton("Calibrare", systemImage: "scope", action: openCalibration)

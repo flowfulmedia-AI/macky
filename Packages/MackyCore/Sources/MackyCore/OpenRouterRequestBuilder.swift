@@ -8,9 +8,14 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case pressKeys = "press_keys"
     case openApplication = "open_app"
     case openURL = "open_url"
+    case runAppleScript = "run_applescript"
+    /// Not an action: the model calls it next to its last actions to say no check is needed.
+    case taskDone = "task_done"
 
     /// Tools that change something on the computer (as opposed to only showing).
-    public static let actionTools: [MackyTool] = [.click, .typeText, .pressKeys, .openApplication, .openURL]
+    public static let actionTools: [MackyTool] = [.click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
+    /// Everything offered when Macky may act.
+    public static let actingTools: [MackyTool] = actionTools + [.taskDone]
 
     public var isAction: Bool { Self.actionTools.contains(self) }
 }
@@ -24,6 +29,7 @@ public enum OpenRouterRequestBuilder {
         messages: [ChatMessage],
         tools: [MackyTool],
         coordinateConvention: CoordinateConvention,
+        disableReasoning: Bool = false,
         maximumResponseTokens: Int = 700
     ) throws -> Data {
         var body: [String: Any] = [
@@ -34,6 +40,10 @@ public enum OpenRouterRequestBuilder {
             // Asks OpenRouter to append token counts and the credit cost to the final stream chunk.
             "usage": ["include": true]
         ]
+        if disableReasoning {
+            // "Thinking" before answering can add several seconds; Macky's tasks rarely need it.
+            body["reasoning"] = ["enabled": false]
+        }
         if !tools.isEmpty {
             body["tools"] = tools.map { toolDefinition(for: $0, coordinateConvention: coordinateConvention) }
             body["tool_choice"] = "auto"
@@ -92,6 +102,22 @@ public enum OpenRouterRequestBuilder {
                 "url": ["type": "string", "description": "The full URL, with any spaces or special characters in search terms percent-encoded or as plain text."]
             ]
             required = ["url"]
+        case .runAppleScript:
+            description = "Runs an AppleScript to control an app directly, in one step, without clicking. The fastest way to control scriptable apps "
+                + "(Spotify, Music, Safari, Finder, Mail, Notes, Calendar, System Events). Examples: "
+                + "tell application \"Spotify\" to play track \"spotify:track:4uLU6hMCjMI75M1A2tKUQC\"; "
+                + "tell application \"Spotify\" to next track; tell application \"Music\" to playpause; "
+                + "tell application \"Safari\" to make new document with properties {URL:\"https://example.com\"}. "
+                + "Returns the script's result or its error message."
+            properties = [
+                "script": ["type": "string", "description": "The complete AppleScript source."]
+            ]
+            required = ["script"]
+        case .taskDone:
+            description = "Call this in the same response as your final actions when they certainly complete the task, "
+                + "so no new screenshot is needed. Do not call it if you need to check the result."
+            properties = [:]
+            required = []
         }
 
         return [

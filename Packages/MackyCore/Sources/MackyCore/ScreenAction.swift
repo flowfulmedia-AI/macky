@@ -21,6 +21,9 @@ public enum ScreenAction: Equatable, Sendable {
     case pressKeys(KeyCombination)
     case openApplication(name: String)
     case openURL(String)
+    case runAppleScript(String)
+    /// Plays, pauses or skips in whatever app is playing media (the keyboard's media keys).
+    case mediaKey(MediaKey)
 
     /// Parses an action tool call. Returns nil for `point_at` or malformed arguments.
     public init?(toolCall: ChatToolCall) {
@@ -46,7 +49,10 @@ public enum ScreenAction: Equatable, Sendable {
         case .openURL:
             guard let url = (arguments["url"] as? String)?.trimmingCharacters(in: .whitespaces), url.contains(":") else { return nil }
             self = .openURL(url)
-        case .pointAt:
+        case .runAppleScript:
+            guard let script = arguments["script"] as? String, !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            self = .runAppleScript(script)
+        case .pointAt, .taskDone:
             return nil
         }
     }
@@ -66,6 +72,12 @@ public enum ScreenAction: Equatable, Sendable {
         case .openURL(let url):
             let shortenedURL = url.count > 70 ? String(url.prefix(70)) + "…" : url
             return "Deschide \(shortenedURL)"
+        case .runAppleScript(let script):
+            let targetApplication = script.range(of: #"application "([^"]+)""#, options: .regularExpression)
+                .map { String(script[$0]).replacingOccurrences(of: "application ", with: "").replacingOccurrences(of: "\"", with: "") }
+            return targetApplication.map { "Controlează \($0) direct" } ?? "Rulează o comandă AppleScript"
+        case .mediaKey(let mediaKey):
+            return mediaKey.displayName
         }
     }
 }

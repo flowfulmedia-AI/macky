@@ -66,7 +66,7 @@ final class ToolConversationEncodingTests: XCTestCase {
         XCTAssertEqual(encodedMessages[1]["content"] as? String, "Clicked.")
 
         let toolNames = (json["tools"] as? [[String: Any]])?.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
-        XCTAssertEqual(toolNames, ["point_at", "click", "type_text", "press_keys", "open_app", "open_url"])
+        XCTAssertEqual(toolNames, ["point_at", "click", "type_text", "press_keys", "open_app", "open_url", "run_applescript", "task_done"])
     }
 
     func testPromptMentionsActionsAndMarkings() {

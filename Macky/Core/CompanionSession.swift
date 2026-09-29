@@ -15,6 +15,8 @@ final class CompanionSession: ObservableObject {
     @Published private(set) var costTracker = SessionCostTracker()
     /// Non-nil while the transcription model is downloading/loading, or when it failed to load.
     @Published private(set) var transcriberStatusText: String?
+    /// "Transcriere 0,8s · primul răspuns 1,5s · total 3,1s", to see where time goes.
+    @Published private(set) var lastTimingSummary: String?
 
     private let settings: AppSettings
     private let apiKeyStore: OpenRouterAPIKeyStore
@@ -42,6 +44,7 @@ final class CompanionSession: ObservableObject {
     private var isAnswerStreamComplete = false
     /// Set when the user answers "Da pentru tot": no more confirmation cards until the next question.
     private var areActionsApprovedForCurrentQuestion = false
+    private var interactionTimings: InteractionTimings?
 
     private var pointingWatchTimer: Timer?
     private var pointingClickMonitor: Any?
@@ -112,6 +115,7 @@ final class CompanionSession: ObservableObject {
         actionConfirmationController.cancelPendingConfirmation()
         drawingOverlayController.clear()
         overlayController.hideImmediately()
+        interactionTimings = nil
         state = .idle
     }
 
@@ -176,9 +180,13 @@ final class CompanionSession: ObservableObject {
         activeRecordingPurpose = purpose
         state = .listening
         overlayController.beginInteraction(activity: purpose == .dictate ? .dictating : .listening)
-        if purpose == .talk && settings.drawingEnabled {
-            // While the keys are held, the mouse draws instead of clicking.
-            drawingOverlayController.beginDrawingSession()
+        if purpose == .talk {
+            // Connect to OpenRouter now, while the user speaks, instead of after they finish.
+            openRouterClient.warmUpConnection()
+            if settings.drawingEnabled {
+                // While the keys are held, moving the mouse leaves a trail.
+                drawingOverlayController.beginDrawingSession()
+            }
         }
     }
 
@@ -199,6 +207,7 @@ final class CompanionSession: ObservableObject {
 
         state = .transcribing
         overlayController.setActivity(.thinking)
+        interactionTimings = InteractionTimings(releaseDate: Date())
 
         currentInteractionTask = Task {
             switch purpose {
@@ -207,8 +216,18 @@ final class CompanionSession: ObservableObject {
                 let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
                 async let capturedScreensTask = captureScreensForQuestion(userDrawingStrokes: userDrawingStrokes)
                 let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier)
-                let capturedScreens = await capturedScreensTask
+                interactionTimings?.transcriptionFinishedDate = Date()
                 guard isCurrent(interactionIdentifier), let transcript else { return }
+
+                // Simple commands ("pauză", "deschide Safari") run instantly, without screenshot or model.
+                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+                   let quickCommand = QuickCommandMatcher.match(transcript),
+                   await runQuickCommand(quickCommand, question: transcript, interactionIdentifier: interactionIdentifier) {
+                    return
+                }
+
+                let capturedScreens = await capturedScreensTask
+                guard isCurrent(interactionIdentifier) else { return }
                 await answer(question: transcript, capturedScreens: capturedScreens, frontmostApplication: frontmostApplication,
                              userDrawingStrokes: userDrawingStrokes, interactionIdentifier: interactionIdentifier)
             case .dictate:
@@ -220,6 +239,37 @@ final class CompanionSession: ObservableObject {
                 overlayController.endInteraction(afterDelay: 1.2)
             }
         }
+    }
+
+    /// Returns false when the command cannot be handled locally (e.g. no app with that name),
+    /// so the model gets the request instead.
+    private func runQuickCommand(_ quickCommand: QuickCommand, question: String, interactionIdentifier: UUID) async -> Bool {
+        if case .openApplication(let name) = quickCommand.action, ScreenActionExecutor.findApplication(named: name) == nil {
+            return false
+        }
+        lastQuestionText = question
+        lastAnswerText = ""
+        isAnswerStreamComplete = false
+        showAndSpeak(quickCommand.acknowledgement)
+        interactionTimings?.firstResponseDate = Date()
+
+        switch quickCommand.action {
+        case .mediaKey(let mediaKey):
+            screenActionExecutor.press(mediaKey)
+        case .openApplication(let name):
+            _ = await screenActionExecutor.openApplication(named: name)
+        default:
+            break
+        }
+        guard isCurrent(interactionIdentifier) else { return true }
+        interactionTimings?.wasQuickCommand = true
+        interactionTimings?.workFinishedDate = Date()
+        conversationHistory.record(userText: question, assistantText: quickCommand.acknowledgement + " (Am făcut: \(quickCommand.action.userFacingDescription).)")
+        isAnswerStreamComplete = true
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
+        }
+        return true
     }
 
     private func cancelListening() {
@@ -294,9 +344,11 @@ final class CompanionSession: ObservableObject {
 
         let coordinateConvention = settings.coordinateConvention(forModelIdentifier: modelIdentifier)
         var useToolCalling = settings.shouldUseToolCalling(forModelIdentifier: modelIdentifier, catalogModel: modelCatalogStore.model(withIdentifier: modelIdentifier))
+        var disableReasoning = settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier)
 
-        // Second attempt only happens when the model rejects tool calling before answering anything.
-        for attemptNumber in 1...2 {
+        // Retries only happen when the model rejects a setting before answering anything;
+        // the model is remembered so the next question goes straight through.
+        for _ in 1...3 {
             do {
                 try await runConversationTurn(
                     question: question,
@@ -307,10 +359,14 @@ final class CompanionSession: ObservableObject {
                     apiKey: apiKey,
                     coordinateConvention: coordinateConvention,
                     useToolCalling: useToolCalling,
+                    disableReasoning: disableReasoning,
                     interactionIdentifier: interactionIdentifier
                 )
                 return
-            } catch let apiError as OpenRouterAPIError where apiError.indicatesToolCallingUnsupported && useToolCalling && attemptNumber == 1 {
+            } catch let apiError as OpenRouterAPIError where apiError.indicatesReasoningSettingRejected && disableReasoning {
+                settings.markModelRejectingReasoningSetting(modelIdentifier)
+                disableReasoning = false
+            } catch let apiError as OpenRouterAPIError where apiError.indicatesToolCallingUnsupported && useToolCalling {
                 settings.markModelWithoutToolCalling(modelIdentifier)
                 useToolCalling = false
             } catch {
@@ -333,11 +389,12 @@ final class CompanionSession: ObservableObject {
         apiKey: String,
         coordinateConvention: CoordinateConvention,
         useToolCalling: Bool,
+        disableReasoning: Bool,
         interactionIdentifier: UUID
     ) async throws {
         let actionsEnabled = useToolCalling && settings.actionMode != .disabled
         var tools: [MackyTool] = useToolCalling ? [.pointAt] : []
-        if actionsEnabled { tools += MackyTool.actionTools }
+        if actionsEnabled { tools += MackyTool.actingTools }
 
         let systemPrompt = MackyPrompt.systemPrompt(
             language: settings.responseLanguage,
@@ -363,12 +420,17 @@ final class CompanionSession: ObservableObject {
         areActionsApprovedForCurrentQuestion = false
 
         agentLoop: for stepNumber in 1...Self.maximumAgentSteps {
+            // Only the first response is spoken live (the answer, or the short "Sigur, mă ocup!").
+            // Later steps of a task stay quiet unless they end the task with something to say.
+            let isFirstStep = stepNumber == 1
             let stepResult = try await streamModelStep(
                 messages: messages,
                 tools: tools,
                 modelIdentifier: modelIdentifier,
                 apiKey: apiKey,
                 coordinateConvention: coordinateConvention,
+                disableReasoning: disableReasoning,
+                speaksTextLive: isFirstStep,
                 interactionIdentifier: interactionIdentifier
             )
             guard isCurrent(interactionIdentifier) else { return }
@@ -376,7 +438,12 @@ final class CompanionSession: ObservableObject {
             pointedLabels += stepResult.pointingInstructions.map(\.label).filter { !$0.isEmpty }
 
             let requestedActions = stepResult.toolCalls.compactMap { ScreenAction(toolCall: $0) }
+            let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
             guard actionsEnabled, !requestedActions.isEmpty else {
+                if !isFirstStep && !stepResult.visibleText.isEmpty {
+                    // A quiet step that ends with a message (a problem, a question): say it now.
+                    showAndSpeak(stepResult.visibleText)
+                }
                 // A normal answer: show what the model pointed at and finish.
                 if !stepResult.pointingInstructions.isEmpty {
                     await point(
@@ -397,28 +464,39 @@ final class CompanionSession: ObservableObject {
                 toolCalls: stepResult.toolCalls
             ))
             var userDeclined = false
+            var anyActionFailed = false
             for toolCall in stepResult.toolCalls {
                 let resultText: String
                 if userDeclined {
                     resultText = "Skipped because the user declined an earlier action."
+                } else if anyActionFailed && ScreenAction(toolCall: toolCall) != nil {
+                    resultText = "Skipped because an earlier action failed."
                 } else if let action = ScreenAction(toolCall: toolCall) {
                     switch await perform(action, on: currentScreens, coordinateConvention: coordinateConvention, stepNumber: stepNumber, interactionIdentifier: interactionIdentifier) {
-                    case .done(let description):
+                    case .done(let description, let resultDetail):
                         performedActionDescriptions.append(description)
-                        resultText = "Done."
+                        resultText = resultDetail.map { $0.isEmpty ? "Done." : "Done. Result: \($0)" } ?? "Done."
                     case .declined:
                         userDeclined = true
                         resultText = "The user declined this action."
                     case .failed(let reason):
+                        anyActionFailed = true
                         resultText = "Failed: \(reason)"
                     }
                 } else if toolCall.name == MackyTool.pointAt.rawValue {
                     resultText = "Shown to the user."
+                } else if toolCall.name == MackyTool.taskDone.rawValue {
+                    resultText = "OK."
                 } else {
                     resultText = "Invalid tool call arguments."
                 }
                 guard isCurrent(interactionIdentifier) else { return }
                 messages.append(.toolResult(for: toolCall, result: resultText))
+            }
+
+            // The model said these actions finish the task: no extra screenshot and round trip.
+            if modelSaysTaskIsDone && !userDeclined && !anyActionFailed {
+                break agentLoop
             }
 
             if userDeclined {
@@ -444,7 +522,7 @@ final class CompanionSession: ObservableObject {
                 default: return false
                 }
             }
-            try await Task.sleep(nanoseconds: openedSomething ? 1_300_000_000 : 450_000_000)
+            try await Task.sleep(nanoseconds: openedSomething ? 1_100_000_000 : 400_000_000)
             guard isCurrent(interactionIdentifier) else { return }
             currentScreens = await captureScreensForQuestion()
             let observationText = MackyPrompt.afterActionsMessageText(
@@ -464,8 +542,8 @@ final class CompanionSession: ObservableObject {
                 finalAnswer = "Uite aici: \(firstLabel)."
                 speak(finalAnswer)
             } else if !performedActionDescriptions.isEmpty {
+                // Shown, not spoken: the user asked for fewer words while Macky works.
                 finalAnswer = "Gata."
-                speak(finalAnswer)
             } else {
                 finalAnswer = "Modelul nu a trimis niciun răspuns. Încearcă din nou sau alege alt model."
             }
@@ -477,6 +555,7 @@ final class CompanionSession: ObservableObject {
         if !pointedLabels.isEmpty { rememberedAnswer += " (Am arătat pe ecran: \(pointedLabels.joined(separator: ", ")).)" }
         if !performedActionDescriptions.isEmpty { rememberedAnswer += " (Am făcut: \(performedActionDescriptions.joined(separator: "; ")).)" }
         conversationHistory.record(userText: question, assistantText: rememberedAnswer)
+        interactionTimings?.workFinishedDate = Date()
         isAnswerStreamComplete = true
 
         guard isCurrent(interactionIdentifier) else { return }
@@ -498,13 +577,16 @@ final class CompanionSession: ObservableObject {
         modelIdentifier: String,
         apiKey: String,
         coordinateConvention: CoordinateConvention,
+        disableReasoning: Bool,
+        speaksTextLive: Bool,
         interactionIdentifier: UUID
     ) async throws -> ModelStepResult {
         let requestBody = try OpenRouterRequestBuilder.makeChatCompletionBody(
             modelIdentifier: modelIdentifier,
             messages: messages,
             tools: tools,
-            coordinateConvention: coordinateConvention
+            coordinateConvention: coordinateConvention,
+            disableReasoning: disableReasoning
         )
 
         var pointTagFilter = PointTagStreamFilter()
@@ -518,6 +600,8 @@ final class CompanionSession: ObservableObject {
         func handleVisibleText(_ visibleText: String) {
             guard !visibleText.isEmpty else { return }
             stepText += visibleText
+            // Quiet steps collect their text; the caller decides whether to say it at the end.
+            guard speaksTextLive else { return }
             let stepDisplayText = SpeechTextCleaner.cleanForSpeech(stepText)
             let displayText = earlierAnswerText.isEmpty ? stepDisplayText : earlierAnswerText + " " + stepDisplayText
             lastAnswerText = displayText
@@ -533,6 +617,10 @@ final class CompanionSession: ObservableObject {
 
         for try await streamEvent in openRouterClient.streamChatCompletion(requestBody: requestBody, apiKey: apiKey) {
             guard isCurrent(interactionIdentifier) else { break }
+            if interactionTimings != nil && interactionTimings?.firstResponseDate == nil {
+                if case .textDelta = streamEvent { interactionTimings?.firstResponseDate = Date() }
+                if case .toolCall = streamEvent { interactionTimings?.firstResponseDate = Date() }
+            }
             switch streamEvent {
             case .textDelta(let textDelta):
                 let filteredOutput = pointTagFilter.consume(textDelta)
@@ -552,7 +640,7 @@ final class CompanionSession: ObservableObject {
 
         if isCurrent(interactionIdentifier) {
             handleVisibleText(pointTagFilter.flush())
-            if let lastSentence = sentenceSegmenter.flush() {
+            if speaksTextLive, let lastSentence = sentenceSegmenter.flush() {
                 speak(lastSentence)
             }
         }
@@ -570,7 +658,8 @@ final class CompanionSession: ObservableObject {
     // MARK: Acting
 
     private enum ActionOutcome {
-        case done(String)
+        /// `resultDetail` is sent back to the model, e.g. what an AppleScript returned.
+        case done(String, resultDetail: String?)
         case declined
         case failed(String)
     }
@@ -630,10 +719,18 @@ final class CompanionSession: ObservableObject {
             guard screenActionExecutor.openURL(url) else {
                 return .failed("This URL could not be opened.")
             }
+        case .runAppleScript(let script):
+            let scriptResult = await screenActionExecutor.runAppleScript(script)
+            guard scriptResult.succeeded else {
+                return .failed("AppleScript error: \(scriptResult.output)")
+            }
+            return .done(action.userFacingDescription, resultDetail: scriptResult.output)
+        case .mediaKey(let mediaKey):
+            screenActionExecutor.press(mediaKey)
         }
         // A short pause lets the app handle one input before the next one arrives.
         try? await Task.sleep(nanoseconds: 150_000_000)
-        return .done(action.userFacingDescription)
+        return .done(action.userFacingDescription, resultDetail: nil)
     }
 
     /// Converts a model coordinate to a real screen point, snapping to the control underneath
@@ -712,6 +809,10 @@ final class CompanionSession: ObservableObject {
     private func finishInteraction() {
         state = .idle
         drawingOverlayController.clear()
+        if let interactionTimings {
+            lastTimingSummary = interactionTimings.summary(finishedDate: Date())
+            self.interactionTimings = nil
+        }
         if overlayController.isShowingPointing {
             // The pointing watcher hides the overlay once the user clicks or the window moves.
             return
@@ -864,5 +965,29 @@ final class CompanionSession: ObservableObject {
             }
         }
         return error.localizedDescription
+    }
+}
+
+/// Where the time of one spoken request went, measured from releasing the hotkey.
+struct InteractionTimings {
+    let releaseDate: Date
+    var transcriptionFinishedDate: Date?
+    /// First text or tool call from the model (or the instant reply of a quick command).
+    var firstResponseDate: Date?
+    var wasQuickCommand = false
+    /// When the task itself was done (speech may continue a little longer).
+    var workFinishedDate: Date?
+
+    func summary(finishedDate: Date) -> String {
+        let finishedDate = workFinishedDate ?? finishedDate
+        func seconds(_ date: Date?) -> String? {
+            date.map { String(format: "%.1fs", $0.timeIntervalSince(releaseDate)).replacingOccurrences(of: ".", with: ",") }
+        }
+        var parts: [String] = []
+        if wasQuickCommand { parts.append("comandă rapidă") }
+        if let transcription = seconds(transcriptionFinishedDate) { parts.append("transcriere \(transcription)") }
+        if let firstResponse = seconds(firstResponseDate) { parts.append("primul răspuns \(firstResponse)") }
+        if let total = seconds(finishedDate) { parts.append("total \(total)") }
+        return "Ultima cerere: " + parts.joined(separator: " · ")
     }
 }

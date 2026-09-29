@@ -95,6 +95,15 @@ final class OpenRouterClient: @unchecked Sendable {
         return collectedResponse
     }
 
+    /// Opens the network connection (DNS + TLS) while the user is still talking, so the real
+    /// request a few seconds later reuses it instead of paying that setup time.
+    func warmUpConnection() {
+        var request = makeRequest(path: "models", apiKey: nil)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+        urlSession.dataTask(with: request).resume()
+    }
+
     func fetchModels() async throws -> [ModelSummary] {
         let request = makeRequest(path: "models", apiKey: nil)
         let (data, response) = try await urlSession.data(for: request)

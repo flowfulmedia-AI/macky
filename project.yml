@@ -42,6 +42,7 @@ targets:
         # Menu bar only: no Dock icon, no main window.
         LSUIElement: true
         NSMicrophoneUsageDescription: Macky te ascultă doar cât ții apăsată scurtătura, ca să-ți înțeleagă întrebarea.
+        NSAppleEventsUsageDescription: Macky controlează direct aplicații precum Spotify sau Safari doar când îi ceri tu, ca sarcinile să meargă repede.
         NSSpeechRecognitionUsageDescription: Macky poate folosi recunoașterea vocală Apple ca alternativă la Whisper local.
         NSHumanReadableCopyright: Macky — aplicație personală.
     settings:

@@ -59,6 +59,12 @@ public struct OpenRouterAPIError: Error, Equatable, LocalizedError {
         return lowercasedMessage.contains("tool") && (lowercasedMessage.contains("support") || httpStatusCode == 404)
     }
 
+    /// Some models refuse to turn their reasoning off (or do not accept the parameter at all).
+    public var indicatesReasoningSettingRejected: Bool {
+        let lowercasedMessage = message.lowercased()
+        return (httpStatusCode == 400 || httpStatusCode == 404) && (lowercasedMessage.contains("reasoning") || lowercasedMessage.contains("thinking"))
+    }
+
     public var indicatesInvalidAPIKey: Bool { httpStatusCode == 401 }
     public var indicatesInsufficientCredits: Bool { httpStatusCode == 402 }
 

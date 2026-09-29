@@ -98,6 +98,12 @@ final class AppSettings: ObservableObject {
     /// The panel drops down from the MacBook notch when the mouse touches it.
     @Published var notchPanelEnabled: Bool { didSet { defaults.set(notchPanelEnabled, forKey: Keys.notchPanelEnabled) } }
     @Published var showMenuBarIcon: Bool { didSet { defaults.set(showMenuBarIcon, forKey: Keys.showMenuBarIcon) } }
+    /// Asks models not to "think" before answering, which saves seconds on every step.
+    @Published var disableModelReasoning: Bool { didSet { defaults.set(disableModelReasoning, forKey: Keys.disableModelReasoning) } }
+    /// "Pauză", "următoarea melodie", "deschide Safari" run instantly, without the model.
+    @Published var quickCommandsEnabled: Bool { didSet { defaults.set(quickCommandsEnabled, forKey: Keys.quickCommandsEnabled) } }
+    /// Models that rejected the "no reasoning" setting; they are called without it.
+    @Published private(set) var modelsRejectingReasoningSetting: Set<String> { didSet { defaults.set(Array(modelsRejectingReasoningSetting), forKey: Keys.modelsRejectingReasoningSetting) } }
 
     @Published var rememberedExchangeCount: Int { didSet { defaults.set(rememberedExchangeCount, forKey: Keys.rememberedExchangeCount) } }
     /// Models that answered "tool use not supported"; they get text tags instead of the point_at tool.
@@ -125,7 +131,9 @@ final class AppSettings: ObservableObject {
             Keys.actionMode: ActionMode.askFirst.rawValue,
             Keys.drawingEnabled: true,
             Keys.notchPanelEnabled: true,
-            Keys.showMenuBarIcon: false
+            Keys.showMenuBarIcon: false,
+            Keys.disableModelReasoning: true,
+            Keys.quickCommandsEnabled: true
         ])
 
         fastModelIdentifier = defaults.string(forKey: Keys.fastModelIdentifier) ?? ""
@@ -148,6 +156,9 @@ final class AppSettings: ObservableObject {
         drawingEnabled = defaults.bool(forKey: Keys.drawingEnabled)
         notchPanelEnabled = defaults.bool(forKey: Keys.notchPanelEnabled)
         showMenuBarIcon = defaults.bool(forKey: Keys.showMenuBarIcon)
+        disableModelReasoning = defaults.bool(forKey: Keys.disableModelReasoning)
+        quickCommandsEnabled = defaults.bool(forKey: Keys.quickCommandsEnabled)
+        modelsRejectingReasoningSetting = Set(defaults.stringArray(forKey: Keys.modelsRejectingReasoningSetting) ?? [])
         rememberedExchangeCount = defaults.integer(forKey: Keys.rememberedExchangeCount)
         modelsWithoutToolCalling = Set(defaults.stringArray(forKey: Keys.modelsWithoutToolCalling) ?? [])
     }
@@ -172,6 +183,14 @@ final class AppSettings: ObservableObject {
 
     func markModelWithoutToolCalling(_ modelIdentifier: String) {
         modelsWithoutToolCalling.insert(modelIdentifier)
+    }
+
+    func shouldDisableReasoning(forModelIdentifier modelIdentifier: String) -> Bool {
+        disableModelReasoning && !modelsRejectingReasoningSetting.contains(modelIdentifier)
+    }
+
+    func markModelRejectingReasoningSetting(_ modelIdentifier: String) {
+        modelsRejectingReasoningSetting.insert(modelIdentifier)
     }
 
     /// Fills empty model slots with the newest suitable models from the catalog.
@@ -206,5 +225,8 @@ final class AppSettings: ObservableObject {
         static let drawingEnabled = "drawingEnabled"
         static let notchPanelEnabled = "notchPanelEnabled"
         static let showMenuBarIcon = "showMenuBarIcon"
+        static let disableModelReasoning = "disableModelReasoning"
+        static let quickCommandsEnabled = "quickCommandsEnabled"
+        static let modelsRejectingReasoningSetting = "modelsRejectingReasoningSetting"
     }
 }

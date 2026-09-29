@@ -53,6 +53,74 @@ final class ScreenActionExecutor {
         keyUpEvent?.post(tap: .cgAnnotatedSessionEventTap)
     }
 
+    struct AppleScriptResult {
+        var succeeded: Bool
+        var output: String
+    }
+
+    /// Runs AppleScript through `osascript`, off the main thread, with a timeout.
+    /// The first time a script controls an app, macOS asks the user to allow Macky to do so.
+    func runAppleScript(_ script: String) async -> AppleScriptResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = ["-e", script]
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(returning: AppleScriptResult(succeeded: false, output: error.localizedDescription))
+                    return
+                }
+                // A script waiting on a permission dialog or a hung app must not block Macky forever.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+                    if process.isRunning { process.terminate() }
+                }
+                process.waitUntilExit()
+                let output = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let errorOutput = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let succeeded = process.terminationStatus == 0
+                continuation.resume(returning: AppleScriptResult(
+                    succeeded: succeeded,
+                    output: String((succeeded ? output : (errorOutput.isEmpty ? "Script stopped (timeout)." : errorOutput)).prefix(1500))
+                ))
+            }
+        }
+    }
+
+    /// Sends a media key (play/pause, next, previous) like the keyboard's F7–F9 keys.
+    /// Whichever app is playing (Spotify, Music, a browser) reacts to it.
+    func press(_ mediaKey: MediaKey) {
+        // NX_KEYTYPE_PLAY = 16, NX_KEYTYPE_NEXT = 17, NX_KEYTYPE_PREVIOUS = 18 (IOKit/hidsystem/ev_keymap.h).
+        let mediaKeyCode: Int
+        switch mediaKey {
+        case .playPause: mediaKeyCode = 16
+        case .nextTrack: mediaKeyCode = 17
+        case .previousTrack: mediaKeyCode = 18
+        }
+        for isKeyDown in [true, false] {
+            let keyState = isKeyDown ? 0xA : 0xB
+            let mediaEvent = NSEvent.otherEvent(
+                with: .systemDefined,
+                location: .zero,
+                modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(keyState << 8)),
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                subtype: 8,
+                data1: (mediaKeyCode << 16) | (keyState << 8),
+                data2: -1
+            )
+            mediaEvent?.cgEvent?.post(tap: .cghidEventTap)
+        }
+    }
+
     /// Launches or brings forward an app by name. Returns false when no such app is installed.
     func openApplication(named name: String) async -> Bool {
         guard let applicationURL = Self.findApplication(named: name) else { return false }
@@ -74,7 +142,7 @@ final class ScreenActionExecutor {
         return NSWorkspace.shared.open(url)
     }
 
-    private static func findApplication(named name: String) -> URL? {
+    static func findApplication(named name: String) -> URL? {
         let wantedName = name.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespaces)
         if let runningApplication = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName?.lowercased() == wantedName }),
            let bundleURL = runningApplication.bundleURL {

@@ -9,11 +9,12 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case openApplication = "open_app"
     case openURL = "open_url"
     case runAppleScript = "run_applescript"
+    case clickElement = "click_element"
     /// Not an action: the model calls it next to its last actions to say no check is needed.
     case taskDone = "task_done"
 
     /// Tools that change something on the computer (as opposed to only showing).
-    public static let actionTools: [MackyTool] = [.click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
+    public static let actionTools: [MackyTool] = [.clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
 
@@ -113,10 +114,23 @@ public enum OpenRouterRequestBuilder {
                 "script": ["type": "string", "description": "The complete AppleScript source."]
             ]
             required = ["script"]
+        case .clickElement:
+            description = "Presses a button, link, tab or menu item by its visible name or accessibility label, found directly in the app, "
+                + "without needing screen coordinates. Waits up to 4 seconds for it to appear, so it can follow open_app or open_url "
+                + "in the same response. Preferred over click whenever you know the element's name. If nothing matches, the result lists "
+                + "the names that are available."
+            properties = [
+                "label": ["type": "string", "description": "Name of the element, e.g. 'Play', 'Liked Songs', 'Search', 'Salvează'."],
+                "app": ["type": "string", "description": "Application to look in, e.g. 'Spotify'. Omit for the app in front."]
+            ]
+            required = ["label"]
         case .taskDone:
             description = "Call this in the same response as your final actions when they certainly complete the task, "
                 + "so no new screenshot is needed. Do not call it if you need to check the result."
-            properties = [:]
+            // Google's models reject tools whose parameter object has no properties, so there is one optional field.
+            properties = [
+                "note": ["type": "string", "description": "Optional short note about what was done."]
+            ]
             required = []
         }
 

@@ -22,6 +22,8 @@ public enum ScreenAction: Equatable, Sendable {
     case openApplication(name: String)
     case openURL(String)
     case runAppleScript(String)
+    /// Presses an element found by name in the accessibility tree; nil application means the app in front.
+    case clickElement(label: String, applicationName: String?)
     /// Plays, pauses or skips in whatever app is playing media (the keyboard's media keys).
     case mediaKey(MediaKey)
 
@@ -52,6 +54,10 @@ public enum ScreenAction: Equatable, Sendable {
         case .runAppleScript:
             guard let script = arguments["script"] as? String, !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             self = .runAppleScript(script)
+        case .clickElement:
+            guard let label = (arguments["label"] as? String)?.trimmingCharacters(in: .whitespaces), !label.isEmpty else { return nil }
+            let applicationName = (arguments["app"] as? String)?.trimmingCharacters(in: .whitespaces)
+            self = .clickElement(label: label, applicationName: (applicationName?.isEmpty ?? true) ? nil : applicationName)
         case .pointAt, .taskDone:
             return nil
         }
@@ -76,6 +82,8 @@ public enum ScreenAction: Equatable, Sendable {
             let targetApplication = script.range(of: #"application "([^"]+)""#, options: .regularExpression)
                 .map { String(script[$0]).replacingOccurrences(of: "application ", with: "").replacingOccurrences(of: "\"", with: "") }
             return targetApplication.map { "Controlează \($0) direct" } ?? "Rulează o comandă AppleScript"
+        case .clickElement(let label, let applicationName):
+            return applicationName.map { "Apasă „\(label)” în \($0)" } ?? "Apasă „\(label)”"
         case .mediaKey(let mediaKey):
             return mediaKey.displayName
         }

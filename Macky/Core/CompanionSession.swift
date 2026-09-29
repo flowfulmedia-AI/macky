@@ -31,6 +31,7 @@ final class CompanionSession: ObservableObject {
     private let drawingOverlayController: DrawingOverlayController
     private let actionConfirmationController = ActionConfirmationController()
     private let screenActionExecutor: ScreenActionExecutor
+    private let accessibilityElementFinder = AccessibilityElementFinder()
 
     private var transcriber: SpeechTranscriber?
     private var transcriberConfigurationKey = ""
@@ -369,6 +370,14 @@ final class CompanionSession: ObservableObject {
             } catch let apiError as OpenRouterAPIError where apiError.indicatesToolCallingUnsupported && useToolCalling {
                 settings.markModelWithoutToolCalling(modelIdentifier)
                 useToolCalling = false
+            } catch let apiError as OpenRouterAPIError where apiError.httpStatusCode == 400 && (disableReasoning || useToolCalling) {
+                // A request the provider rejects without saying why: drop the optional extras one at a time
+                // (first the reasoning setting, then tools) so the user still gets an answer.
+                if disableReasoning {
+                    disableReasoning = false
+                } else {
+                    useToolCalling = false
+                }
             } catch {
                 guard isCurrent(interactionIdentifier), !(error is CancellationError) else { return }
                 fail(with: Self.userFacingMessage(for: error))
@@ -727,6 +736,12 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: scriptResult.output)
         case .mediaKey(let mediaKey):
             screenActionExecutor.press(mediaKey)
+        case .clickElement(let label, let applicationName):
+            let pressResult = await accessibilityElementFinder.pressElement(label: label, applicationName: applicationName)
+            guard pressResult.succeeded else {
+                return .failed(pressResult.message)
+            }
+            return .done(action.userFacingDescription, resultDetail: pressResult.message)
         }
         // A short pause lets the app handle one input before the next one arrives.
         try? await Task.sleep(nanoseconds: 150_000_000)

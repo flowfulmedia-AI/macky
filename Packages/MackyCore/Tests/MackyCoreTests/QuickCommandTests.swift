@@ -30,6 +30,19 @@ final class QuickCommandMatcherTests: XCTestCase {
         XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "b", name: "task_done", argumentsJSON: "{}")))
     }
 
+    func testClickElementParsingAndLabelMatching() {
+        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "c", name: "click_element", argumentsJSON: #"{"label":"Play","app":"Spotify"}"#)),
+                       .clickElement(label: "Play", applicationName: "Spotify"))
+        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "d", name: "click_element", argumentsJSON: #"{"label":"Salvează","app":""}"#)),
+                       .clickElement(label: "Salvează", applicationName: nil))
+
+        XCTAssertEqual(ElementLabelMatcher.score(elementTexts: ["Play"], wantedLabel: "play"), ElementLabelMatcher.exactMatchScore)
+        XCTAssertEqual(ElementLabelMatcher.score(elementTexts: ["", "Play Liked Songs"], wantedLabel: "Play"), ElementLabelMatcher.startsWithScore)
+        XCTAssertEqual(ElementLabelMatcher.score(elementTexts: ["salveaza"], wantedLabel: "Salvează"), ElementLabelMatcher.exactMatchScore)
+        XCTAssertEqual(ElementLabelMatcher.score(elementTexts: ["Now playing: Play Date"], wantedLabel: "Play Date"), ElementLabelMatcher.containsScore)
+        XCTAssertNil(ElementLabelMatcher.score(elementTexts: ["Pause"], wantedLabel: "Play"))
+    }
+
     func testReasoningCanBeDisabled() throws {
         let data = try OpenRouterRequestBuilder.makeChatCompletionBody(
             modelIdentifier: "m", messages: [ChatMessage(role: .user, text: "hi")], tools: [], coordinateConvention: .imagePixels, disableReasoning: true)

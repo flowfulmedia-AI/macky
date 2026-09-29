@@ -52,6 +52,7 @@ public enum OpenRouterRequestBuilder {
         tools: [MackyTool],
         coordinateConvention: CoordinateConvention,
         disableReasoning: Bool = false,
+        enableWebSearch: Bool = false,
         maximumResponseTokens: Int = 700
     ) throws -> Data {
         var body: [String: Any] = [
@@ -62,6 +63,10 @@ public enum OpenRouterRequestBuilder {
             // Asks OpenRouter to append token counts and the credit cost to the final stream chunk.
             "usage": ["include": true]
         ]
+        if enableWebSearch {
+            // OpenRouter's web plugin searches the web and gives the results to the model (small extra cost per request).
+            body["plugins"] = [["id": "web", "max_results": 6]]
+        }
         if disableReasoning {
             // "Thinking" before answering can add several seconds; Macky's tasks rarely need it.
             body["reasoning"] = ["enabled": false]

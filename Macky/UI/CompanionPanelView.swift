@@ -8,6 +8,7 @@ struct CompanionPanelView: View {
     @ObservedObject var permissions: PermissionsManager
     @ObservedObject var apiKeyStore: OpenRouterAPIKeyStore
     @ObservedObject var modelCatalogStore: ModelCatalogStore
+    @ObservedObject var agentManager: BackgroundAgentManager
 
     let openSettings: () -> Void
     let openCalibration: () -> Void
@@ -31,6 +32,9 @@ struct CompanionPanelView: View {
             }
 
             modelSwitch
+            if !agentManager.jobs.isEmpty {
+                BackgroundJobsView(agentManager: agentManager)
+            }
             conversationCard
             questionField
             Spacer(minLength: 0)
@@ -269,6 +273,92 @@ struct OnboardingChecklistView: View {
                     .controlSize(.small)
                     .pointingHandOnHover()
             }
+        }
+    }
+}
+
+/// The latest background agent jobs: what they are doing now, or what they found.
+struct BackgroundJobsView: View {
+    @ObservedObject var agentManager: BackgroundAgentManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("În fundal").font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                Spacer()
+                if agentManager.jobs.contains(where: { !$0.isRunning }) {
+                    Button("Curăță") { agentManager.removeFinishedJobs() }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .pointingHandOnHover()
+                }
+            }
+            ForEach(agentManager.jobs.prefix(3)) { job in
+                jobRow(job)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: MackyDesign.cornerRadius).fill(MackyDesign.cardBackground))
+    }
+
+    private func jobRow(_ job: BackgroundAgentManager.Job) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            statusIcon(for: job)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(job.goal)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text(detailText(for: job))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+                if case .finished(_, let savedFilePath?) = job.status {
+                    Button("Deschide rezultatul") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: savedFilePath))
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .pointingHandOnHover()
+                }
+            }
+            Spacer(minLength: 0)
+            if job.isRunning {
+                Button {
+                    agentManager.cancel(job.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Oprește agentul")
+                .pointingHandOnHover()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusIcon(for job: BackgroundAgentManager.Job) -> some View {
+        switch job.status {
+        case .running:
+            ProgressView().controlSize(.small)
+        case .finished:
+            Image(systemName: "checkmark.circle.fill").foregroundColor(MackyDesign.accent)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+        case .cancelled:
+            Image(systemName: "stop.circle").foregroundColor(.secondary)
+        }
+    }
+
+    private func detailText(for job: BackgroundAgentManager.Job) -> String {
+        let costText = job.costInCredits > 0 ? " · \(SessionCostTracker.formatCredits(job.costInCredits))" : ""
+        switch job.status {
+        case .running(let progress): return progress + costText
+        case .finished(let summary, _): return summary + costText
+        case .failed(let reason): return reason
+        case .cancelled: return "Oprit."
         }
     }
 }

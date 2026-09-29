@@ -24,6 +24,8 @@ final class AudioRecorder {
 
     /// Called on the main thread with a 0...1 loudness value, used for the waveform.
     var onAudioLevel: ((Float) -> Void)?
+    /// Called on the main thread for every converted chunk: its raw loudness (RMS) and its length in samples.
+    var onAudioChunk: ((Float, Int) -> Void)?
 
     private var audioEngine: AVAudioEngine?
     private let recordedSamplesLock = NSLock()
@@ -65,6 +67,13 @@ final class AudioRecorder {
         return RecordedAudio(samples: samples)
     }
 
+    /// A copy of everything recorded so far, while recording continues.
+    func snapshotSamples() -> [Float] {
+        recordedSamplesLock.lock()
+        defer { recordedSamplesLock.unlock() }
+        return recordedSamples
+    }
+
     private func stopEngine() {
         guard let audioEngine else { return }
         audioEngine.inputNode.removeTap(onBus: 0)
@@ -100,8 +109,11 @@ final class AudioRecorder {
         recordedSamplesLock.unlock()
 
         let audioLevel = Self.normalizedLevel(of: samples)
+        let rootMeanSquare = samples.isEmpty ? 0 : (samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+        let chunkSampleCount = samples.count
         DispatchQueue.main.async { [weak self] in
             self?.onAudioLevel?(audioLevel)
+            self?.onAudioChunk?(rootMeanSquare, chunkSampleCount)
         }
     }
 

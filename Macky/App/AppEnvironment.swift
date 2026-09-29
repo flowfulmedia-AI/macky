@@ -89,6 +89,7 @@ final class AppEnvironment {
             permissions: permissions,
             apiKeyStore: apiKeyStore,
             modelCatalogStore: modelCatalogStore,
+            agentManager: companionSession.backgroundAgentManager,
             openSettings: { [unowned self] in self.openSettings() },
             openCalibration: { [unowned self] in self.openCalibration() }
         ))

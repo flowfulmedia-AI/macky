@@ -21,7 +21,7 @@ public enum ResponseLanguage: String, CaseIterable, Codable, Sendable {
         self == .automatic ? nil : rawValue
     }
 
-    var promptInstruction: String {
+    public var promptInstruction: String {
         switch self {
         case .romanian: return "Always answer in Romanian, even if the screen content is in another language. Keep the names of on-screen buttons and menus exactly as they appear on screen."
         case .english: return "Always answer in English."

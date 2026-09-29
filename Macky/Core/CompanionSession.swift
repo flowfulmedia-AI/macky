@@ -33,6 +33,17 @@ final class CompanionSession: ObservableObject {
     private let screenActionExecutor: ScreenActionExecutor
     private let accessibilityElementFinder = AccessibilityElementFinder()
     private let spotifyController: SpotifyController
+    private let systemController: SystemController
+    private let notesController: NotesController
+    private let windowArranger: WindowArranger
+    private let personalDataController = PersonalDataController()
+    /// Long tasks that run in the background; shown in the panel.
+    let backgroundAgentManager: BackgroundAgentManager
+
+    /// Notices when the user stops talking while still holding the keys (see `audioChunkRecorded`).
+    private var speechEndpointDetector = SpeechEndpointDetector()
+    /// A transcription started during the pause before the keys were released.
+    private var earlyTranscription: (sampleCount: Int, task: Task<String?, Never>)?
 
     private var transcriber: SpeechTranscriber?
     private var transcriberConfigurationKey = ""
@@ -73,9 +84,25 @@ final class CompanionSession: ObservableObject {
             credentialsStore: spotifyCredentialsStore
         )
         spotifyController.warmUp()
+        self.systemController = SystemController(executor: screenActionExecutor)
+        self.notesController = NotesController(executor: screenActionExecutor)
+        self.windowArranger = WindowArranger(executor: screenActionExecutor)
+        self.backgroundAgentManager = BackgroundAgentManager(
+            settings: settings,
+            apiKeyStore: apiKeyStore,
+            openRouterClient: openRouterClient,
+            personalDataController: personalDataController,
+            notesController: notesController
+        )
 
         audioRecorder.onAudioLevel = { [weak overlayController] audioLevel in
             overlayController?.setAudioLevel(audioLevel)
+        }
+        audioRecorder.onAudioChunk = { [weak self] chunkLevel, sampleCount in
+            self?.audioChunkRecorded(chunkLevel: chunkLevel, sampleCount: sampleCount)
+        }
+        backgroundAgentManager.onJobFinished = { [weak self] job in
+            self?.backgroundJobFinished(job)
         }
         speechSpeaker.onAllSpeechFinished = { [weak self] in
             self?.speechQueueDrained()
@@ -187,6 +214,9 @@ final class CompanionSession: ObservableObject {
         }
         _ = startNewInteraction()
         activeRecordingPurpose = purpose
+        speechEndpointDetector = SpeechEndpointDetector()
+        earlyTranscription?.task.cancel()
+        earlyTranscription = nil
         state = .listening
         overlayController.beginInteraction(activity: purpose == .dictate ? .dictating : .listening)
         if purpose == .talk {
@@ -228,6 +258,19 @@ final class CompanionSession: ObservableObject {
                 interactionTimings?.transcriptionFinishedDate = Date()
                 guard isCurrent(interactionIdentifier), let transcript else { return }
 
+                // "Agent, caută…" starts a background job right away.
+                if settings.actionMode != .disabled, let backgroundGoal = BackgroundTaskTrigger.goal(from: transcript) {
+                    startBackgroundJob(goal: backgroundGoal, question: transcript)
+                    return
+                }
+
+                // Volume, brightness, dark mode, lock: instant, no model.
+                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+                   let systemCommand = SystemCommandMatcher.match(transcript) {
+                    await runSystemCommand(systemCommand, question: transcript, interactionIdentifier: interactionIdentifier)
+                    return
+                }
+
                 // Music requests go straight to Spotify: no screenshot, no model, verified playback.
                 if settings.quickCommandsEnabled && settings.actionMode != .disabled,
                    let spotifyCommand = SpotifyCommandMatcher.match(transcript) {
@@ -255,6 +298,88 @@ final class CompanionSession: ObservableObject {
                 overlayController.endInteraction(afterDelay: 1.2)
             }
         }
+    }
+
+    private func runSystemCommand(_ systemCommand: SystemCommand, question: String, interactionIdentifier: UUID) async {
+        lastQuestionText = question
+        lastAnswerText = ""
+        isAnswerStreamComplete = false
+        interactionTimings?.firstResponseDate = Date()
+        let outcome = await systemController.perform(systemCommand)
+        guard isCurrent(interactionIdentifier) else { return }
+        interactionTimings?.workFinishedDate = Date()
+        if outcome.succeeded {
+            // Settings changes are visible (or audible) on their own: a short word is enough.
+            showAndSpeak(systemCommand == .lockScreen || systemCommand == .sleepDisplay ? outcome.message : "Sigur!")
+            lastAnswerText = outcome.message
+            overlayController.setBubbleText(outcome.message)
+        } else {
+            showAndSpeak(outcome.message)
+        }
+        conversationHistory.record(userText: question, assistantText: outcome.message)
+        isAnswerStreamComplete = true
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
+        }
+    }
+
+    private func startBackgroundJob(goal: String, question: String) {
+        backgroundAgentManager.start(goal: goal)
+        lastQuestionText = question
+        lastAnswerText = ""
+        isAnswerStreamComplete = false
+        showAndSpeak("Sigur, mă ocup în fundal!")
+        interactionTimings?.firstResponseDate = Date()
+        interactionTimings?.workFinishedDate = Date()
+        conversationHistory.record(userText: question, assistantText: "Am pornit un agent în fundal pentru: \(goal)")
+        isAnswerStreamComplete = true
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
+        }
+    }
+
+    /// Announces a finished background job, unless the user is in the middle of something with Macky.
+    private func backgroundJobFinished(_ job: BackgroundAgentManager.Job) {
+        let announcement: String
+        switch job.status {
+        case .finished(let summary, _):
+            announcement = "Agentul a terminat. " + summary
+        case .failed(let reason):
+            announcement = "Agentul nu a reușit: " + reason
+        case .running, .cancelled:
+            return
+        }
+        guard !state.isBusy else { return }
+        overlayController.beginInteraction(activity: .speaking)
+        lastAnswerText = announcement
+        overlayController.setBubbleText(announcement)
+        state = .speaking
+        isAnswerStreamComplete = true
+        speak(announcement)
+        if !settings.speakResponses { finishInteraction() }
+    }
+
+    // MARK: Early transcription
+
+    /// Called for every ~0.1 s of recorded audio. When the user pauses after speaking, the audio so far
+    /// is transcribed right away; if they then release the keys without saying more, that transcript is used
+    /// and there is nothing left to wait for.
+    private func audioChunkRecorded(chunkLevel: Float, sampleCount: Int) {
+        guard activeRecordingPurpose != nil else { return }
+        speechEndpointDetector.append(chunkLevel: chunkLevel, sampleCount: sampleCount)
+        guard speechEndpointDetector.hasSpeechEnded(minimumPause: 0.3, sampleRate: AudioRecorder.transcriptionSampleRate) else { return }
+        // Already transcribed everything up to this pause.
+        if let earlyTranscription, speechEndpointDetector.isSilentAfter(sampleIndex: earlyTranscription.sampleCount) { return }
+
+        prepareTranscriber()
+        guard let transcriber else { return }
+        let samples = audioRecorder.snapshotSamples()
+        guard samples.count >= Int(AudioRecorder.transcriptionSampleRate * Self.minimumRecordingDurationInSeconds) else { return }
+        let languageCode = settings.responseLanguage.transcriptionLanguageCode
+        earlyTranscription?.task.cancel()
+        earlyTranscription = (samples.count, Task {
+            try? await transcriber.transcribe(samples: samples, languageCode: languageCode)
+        })
     }
 
     /// Says a short "Sigur, pornesc acum!" right away, then drives Spotify and only speaks again if it failed.
@@ -332,7 +457,16 @@ final class CompanionSession: ObservableObject {
             return nil
         }
         do {
-            let transcript = try await transcriber.transcribe(samples: recordedAudio.samples, languageCode: settings.responseLanguage.transcriptionLanguageCode)
+            let transcript: String
+            if let earlyTranscription, speechEndpointDetector.isSilentAfter(sampleIndex: earlyTranscription.sampleCount),
+               let earlyTranscript = await earlyTranscription.task.value, !earlyTranscript.isEmpty {
+                // Nothing was said after the pause: the transcript made during the pause is complete.
+                transcript = earlyTranscript
+            } else {
+                earlyTranscription?.task.cancel()
+                transcript = try await transcriber.transcribe(samples: recordedAudio.samples, languageCode: settings.responseLanguage.transcriptionLanguageCode)
+            }
+            earlyTranscription = nil
             guard isCurrent(interactionIdentifier) else { return nil }
             let cleanedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             // Whisper sometimes "hears" these in silence.
@@ -735,7 +869,10 @@ final class CompanionSession: ObservableObject {
             guard isCurrent(interactionIdentifier) else { return .declined }
         }
 
-        if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion {
+        // Reading the calendar or starting a background job changes nothing on screen: no need to ask.
+        var needsConfirmation = !action.isReadOnly
+        if case .startBackgroundTask = action { needsConfirmation = false }
+        if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion && needsConfirmation {
             let answer = await actionConfirmationController.requestConfirmation(
                 actionDescription: action.userFacingDescription,
                 stepNumber: stepNumber,
@@ -783,6 +920,23 @@ final class CompanionSession: ObservableObject {
             let outcome = await spotifyController.perform(spotifyCommand)
             guard outcome.succeeded else { return .failed(outcome.message) }
             return .done(action.userFacingDescription, resultDetail: outcome.message)
+        case .system(let systemCommand):
+            return Self.actionOutcome(await systemController.perform(systemCommand), description: action.userFacingDescription)
+        case .createEvent(let request):
+            return Self.actionOutcome(await personalDataController.createEvent(request), description: action.userFacingDescription)
+        case .listEvents(let fromDate, let toDate):
+            return Self.actionOutcome(await personalDataController.listEvents(from: fromDate, to: toDate), description: action.userFacingDescription)
+        case .createReminder(let title, let dueDate, let notes):
+            return Self.actionOutcome(await personalDataController.createReminder(title: title, dueDate: dueDate, notes: notes), description: action.userFacingDescription)
+        case .listReminders(let limit):
+            return Self.actionOutcome(await personalDataController.listReminders(limit: limit), description: action.userFacingDescription)
+        case .createNote(let title, let body):
+            return Self.actionOutcome(await notesController.createNote(title: title, body: body), description: action.userFacingDescription)
+        case .arrangeWindow(let applicationName, let layout):
+            return Self.actionOutcome(await windowArranger.arrange(applicationName: applicationName, layout: layout), description: action.userFacingDescription)
+        case .startBackgroundTask(let goal):
+            backgroundAgentManager.start(goal: goal)
+            return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .clickElement(let label, let applicationName):
             let pressResult = await accessibilityElementFinder.pressElement(label: label, applicationName: applicationName)
             guard pressResult.succeeded else {
@@ -793,6 +947,10 @@ final class CompanionSession: ObservableObject {
         // A short pause lets the app handle one input before the next one arrives.
         try? await Task.sleep(nanoseconds: 150_000_000)
         return .done(action.userFacingDescription, resultDetail: nil)
+    }
+
+    private static func actionOutcome(_ outcome: IntegrationOutcome, description: String) -> ActionOutcome {
+        outcome.succeeded ? .done(description, resultDetail: outcome.message) : .failed(outcome.message)
     }
 
     /// Converts a model coordinate to a real screen point, snapping to the control underneath

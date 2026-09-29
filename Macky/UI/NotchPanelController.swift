@@ -156,6 +156,7 @@ final class NotchPanelController {
         notchPanel.contentView = NSHostingView(rootView: NotchRootView(
             model: model,
             session: session,
+            agentManager: session.backgroundAgentManager,
             panelSize: panelFrame.size,
             content: makeContent()
         ))
@@ -215,6 +216,7 @@ final class NotchPanelController {
 private struct NotchRootView: View {
     @ObservedObject var model: NotchPanelModel
     @ObservedObject var session: CompanionSession
+    @ObservedObject var agentManager: BackgroundAgentManager
     let panelSize: CGSize
     let content: AnyView
 
@@ -234,14 +236,14 @@ private struct NotchRootView: View {
                     insertion: .scale(scale: 0.3, anchor: .top).combined(with: .opacity),
                     removal: .scale(scale: 0.3, anchor: .top).combined(with: .opacity)
                 ))
-            } else if session.state.isBusy {
+            } else if session.state.isBusy || agentManager.runningJobCount > 0 {
                 liveIndicator
                     .transition(.opacity)
             }
         }
         .frame(width: panelSize.width, height: panelSize.height, alignment: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: model.isExpanded)
-        .animation(.easeInOut(duration: 0.2), value: session.state.isBusy)
+        .animation(.easeInOut(duration: 0.2), value: session.state.isBusy || agentManager.runningJobCount > 0)
     }
 
     /// A black band as tall as the notch and a bit wider, with Macky on the left and the activity on the right.
@@ -278,7 +280,17 @@ private struct NotchRootView: View {
         case .speaking:
             Image(systemName: "waveform").font(.system(size: 11, weight: .semibold)).foregroundColor(MackyDesign.accent)
         default:
-            EmptyView()
+            if agentManager.runningJobCount > 0 {
+                // A background agent is working.
+                HStack(spacing: 3) {
+                    ProgressView().controlSize(.mini).tint(MackyDesign.accentSecondary)
+                    if agentManager.runningJobCount > 1 {
+                        Text("\(agentManager.runningJobCount)").font(.system(size: 10, weight: .bold)).foregroundColor(.white)
+                    }
+                }
+            } else {
+                EmptyView()
+            }
         }
     }
 }

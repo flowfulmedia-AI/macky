@@ -104,6 +104,11 @@ final class ScreenActionExecutor {
         case .nextTrack: mediaKeyCode = 17
         case .previousTrack: mediaKeyCode = 18
         }
+        pressAuxiliaryKey(code: mediaKeyCode)
+    }
+
+    /// Keys from the top row of a Mac keyboard: media (16–18) and brightness (2 = up, 3 = down).
+    func pressAuxiliaryKey(code mediaKeyCode: Int) {
         for isKeyDown in [true, false] {
             let keyState = isKeyDown ? 0xA : 0xB
             let mediaEvent = NSEvent.otherEvent(

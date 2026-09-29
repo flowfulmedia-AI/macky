@@ -206,3 +206,14 @@ auto-update-ul și billing-ul. Nu au sens pentru uz personal.
 - Un **Apple ID** oarecare (fără cont Developer plătit).
 - **Cheia API OpenRouter** (se introduce în aplicație, nu în repo).
 - Opțional: vocea „Ioana (Enhanced)” descărcată din System Settings → Accessibility → Spoken Content.
+
+---
+
+## 8. Stare implementare (29.09.2026)
+
+Etapele 0–4 sunt implementate în cod: panoul din bara de meniu, cheia în Keychain, OpenRouter cu streaming,
+push-to-talk, Whisper local, voce macOS pe propoziții, captură de ecran, cursorul care arată (tool `point_at` +
+rezervă prin text + snap AX), calibrare, dictare, setări și permisiuni.
+
+Verificat automat: testele unitare pentru `MackyCore` și compilarea completă a aplicației pe macOS 15 / Xcode 16.4 (CI).
+Neverificat încă: rularea reală pe un Mac (microfon, permisiuni, precizia pointing-ului). Asta e următorul pas.

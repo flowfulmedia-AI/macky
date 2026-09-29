@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 public enum ResponseLanguage: String, CaseIterable, Codable, Sendable {
     case romanian = "ro"

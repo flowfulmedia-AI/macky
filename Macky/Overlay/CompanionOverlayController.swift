@@ -101,7 +101,9 @@ final class CompanionOverlayController {
     func endInteraction(afterDelay delay: TimeInterval) {
         cancelPendingHide()
         let hideWorkItem = DispatchWorkItem { [weak self] in
-            self?.hideImmediately()
+            MainActor.assumeIsolated {
+                self?.hideImmediately()
+            }
         }
         pendingHideWorkItem = hideWorkItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: hideWorkItem)

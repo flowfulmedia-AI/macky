@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// How a model expresses positions on a screenshot. Vision models are trained differently:
 /// Claude and GPT answer best in pixels of the image they received, while Gemini and

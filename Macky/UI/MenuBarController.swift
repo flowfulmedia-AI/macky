@@ -15,9 +15,9 @@ final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem?
     private var panel: KeyablePanel?
     private var outsideClickMonitor: Any?
-    private let makePanelContent: () -> AnyView
+    private let makePanelContent: @MainActor () -> AnyView
 
-    init(makePanelContent: @escaping () -> AnyView) {
+    init(makePanelContent: @escaping @MainActor () -> AnyView) {
         self.makePanelContent = makePanelContent
     }
 

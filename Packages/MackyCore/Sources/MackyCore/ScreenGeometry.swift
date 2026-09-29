@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Everything needed to map a point in a screenshot back to the real screen.
 public struct CapturedScreenGeometry: Equatable, Sendable {

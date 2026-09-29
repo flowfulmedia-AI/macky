@@ -6,9 +6,11 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case click = "click"
     case typeText = "type_text"
     case pressKeys = "press_keys"
+    case openApplication = "open_app"
+    case openURL = "open_url"
 
     /// Tools that change something on the computer (as opposed to only showing).
-    public static let actionTools: [MackyTool] = [.click, .typeText, .pressKeys]
+    public static let actionTools: [MackyTool] = [.click, .typeText, .pressKeys, .openApplication, .openURL]
 
     public var isAction: Bool { Self.actionTools.contains(self) }
 }
@@ -77,6 +79,19 @@ public enum OpenRouterRequestBuilder {
                 "keys": ["type": "string", "description": "Keys joined with '+', modifiers first: cmd, shift, option, ctrl."]
             ]
             required = ["keys"]
+        case .openApplication:
+            description = "Opens (or brings to the front) a Mac application by name, instantly. Much faster than clicking through the Dock or Spotlight."
+            properties = [
+                "name": ["type": "string", "description": "Application name as in the Applications folder, e.g. 'Spotify', 'Safari', 'System Settings'."]
+            ]
+            required = ["name"]
+        case .openURL:
+            description = "Opens a URL instantly: web pages (https://...) or app links, e.g. 'spotify:search:bohemian rhapsody', "
+                + "'https://www.youtube.com/results?search_query=cats', 'mailto:someone@example.com'. The fastest way to search or navigate."
+            properties = [
+                "url": ["type": "string", "description": "The full URL, with any spaces or special characters in search terms percent-encoded or as plain text."]
+            ]
+            required = ["url"]
         }
 
         return [

@@ -40,6 +40,8 @@ final class CompanionSession: ObservableObject {
     private var currentInteractionTask: Task<Void, Never>?
     private var activeRecordingPurpose: HotkeyAction?
     private var isAnswerStreamComplete = false
+    /// Set when the user answers "Da pentru tot": no more confirmation cards until the next question.
+    private var areActionsApprovedForCurrentQuestion = false
 
     private var pointingWatchTimer: Timer?
     private var pointingClickMonitor: Any?
@@ -358,6 +360,7 @@ final class CompanionSession: ObservableObject {
         var pointedLabels: [String] = []
         var performedActionDescriptions: [String] = []
         isAnswerStreamComplete = false
+        areActionsApprovedForCurrentQuestion = false
 
         agentLoop: for stepNumber in 1...Self.maximumAgentSteps {
             let stepResult = try await streamModelStep(
@@ -434,7 +437,14 @@ final class CompanionSession: ObservableObject {
             // Let the app react, then look again so the model can verify the step.
             state = .thinking
             overlayController.setActivity(.thinking)
-            try await Task.sleep(nanoseconds: 900_000_000)
+            // Launching an app or loading a page takes longer than a click to show up on screen.
+            let openedSomething = requestedActions.contains { action in
+                switch action {
+                case .openApplication, .openURL: return true
+                default: return false
+                }
+            }
+            try await Task.sleep(nanoseconds: openedSomething ? 1_300_000_000 : 450_000_000)
             guard isCurrent(interactionIdentifier) else { return }
             currentScreens = await captureScreensForQuestion()
             let observationText = MackyPrompt.afterActionsMessageText(
@@ -578,19 +588,27 @@ final class CompanionSession: ObservableObject {
             }
             clickTarget = resolvedTarget.point
             // Show where the click will land before it happens.
-            await overlayController.flyCursor(to: resolvedTarget.point, highlightRect: resolvedTarget.highlightRect, label: target.label)
+            // Quick flight: when acting, speed matters more than the animation.
+            await overlayController.flyCursor(to: resolvedTarget.point, highlightRect: resolvedTarget.highlightRect,
+                                              label: target.label, maximumFlightDuration: 0.3)
             guard isCurrent(interactionIdentifier) else { return .declined }
         }
 
-        if settings.actionMode == .askFirst {
-            let isApproved = await actionConfirmationController.requestConfirmation(
+        if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion {
+            let answer = await actionConfirmationController.requestConfirmation(
                 actionDescription: action.userFacingDescription,
                 stepNumber: stepNumber,
                 nearPoint: clickTarget
             )
-            guard isCurrent(interactionIdentifier), isApproved else {
+            guard isCurrent(interactionIdentifier) else { return .declined }
+            switch answer {
+            case .declined:
                 overlayController.clearPointing()
                 return .declined
+            case .approvedForRestOfTask:
+                areActionsApprovedForCurrentQuestion = true
+            case .approved:
+                break
             }
         }
 
@@ -604,8 +622,17 @@ final class CompanionSession: ObservableObject {
             await screenActionExecutor.type(text, pressEnterAfterwards: pressEnterAfterwards)
         case .pressKeys(let combination):
             screenActionExecutor.press(combination)
+        case .openApplication(let name):
+            guard await screenActionExecutor.openApplication(named: name) else {
+                return .failed("No installed application is called \(name).")
+            }
+        case .openURL(let url):
+            guard screenActionExecutor.openURL(url) else {
+                return .failed("This URL could not be opened.")
+            }
         }
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        // A short pause lets the app handle one input before the next one arrives.
+        try? await Task.sleep(nanoseconds: 150_000_000)
         return .done(action.userFacingDescription)
     }
 

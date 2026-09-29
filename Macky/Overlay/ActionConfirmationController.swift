@@ -1,19 +1,26 @@
 import AppKit
 import SwiftUI
 
+enum ActionConfirmationAnswer {
+    case approved
+    /// Approve this and every further action for the current question.
+    case approvedForRestOfTask
+    case declined
+}
+
 /// Asks "Macky wants to click X. OK?" in a small card next to the target, before any action
 /// changes something on the computer. Unanswered cards count as "no" after a timeout.
 @MainActor
 final class ActionConfirmationController {
-    private static let cardSize = NSSize(width: 300, height: 118)
+    private static let cardSize = NSSize(width: 340, height: 118)
     private static let answerTimeoutInSeconds: UInt64 = 30
 
     private var confirmationPanel: KeyablePanel?
-    private var pendingContinuation: CheckedContinuation<Bool, Never>?
+    private var pendingContinuation: CheckedContinuation<ActionConfirmationAnswer, Never>?
     private var currentConfirmationIdentifier: UUID?
 
     /// `nearPoint` is in AppKit global coordinates; nil places the card near the mouse.
-    func requestConfirmation(actionDescription: String, stepNumber: Int, nearPoint: CGPoint?) async -> Bool {
+    func requestConfirmation(actionDescription: String, stepNumber: Int, nearPoint: CGPoint?) async -> ActionConfirmationAnswer {
         cancelPendingConfirmation()
         let anchorPoint = nearPoint ?? NSEvent.mouseLocation
 
@@ -26,22 +33,22 @@ final class ActionConfirmationController {
                 try? await Task.sleep(nanoseconds: Self.answerTimeoutInSeconds * 1_000_000_000)
                 // Only time out this card, never a newer one.
                 guard let self, self.currentConfirmationIdentifier == confirmationIdentifier else { return }
-                self.finish(with: false)
+                self.finish(with: .declined)
             }
         }
     }
 
     /// Used when the user interrupts Macky: an open question is answered "no".
     func cancelPendingConfirmation() {
-        finish(with: false)
+        finish(with: .declined)
     }
 
-    private func finish(with isApproved: Bool) {
+    private func finish(with answer: ActionConfirmationAnswer) {
         confirmationPanel?.orderOut(nil)
         confirmationPanel = nil
         let continuation = pendingContinuation
         pendingContinuation = nil
-        continuation?.resume(returning: isApproved)
+        continuation?.resume(returning: answer)
     }
 
     private func showCard(actionDescription: String, stepNumber: Int, anchorPoint: CGPoint) {
@@ -64,8 +71,7 @@ final class ActionConfirmationController {
         panel.contentView = NSHostingView(rootView: ActionConfirmationCard(
             actionDescription: actionDescription,
             stepNumber: stepNumber,
-            onApprove: { [weak self] in self?.finish(with: true) },
-            onDecline: { [weak self] in self?.finish(with: false) }
+            onAnswer: { [weak self] answer in self?.finish(with: answer) }
         ))
 
         let screenFrame = NSScreen.screens.first { NSMouseInRect(anchorPoint, $0.frame, false) }?.visibleFrame
@@ -86,8 +92,7 @@ final class ActionConfirmationController {
 private struct ActionConfirmationCard: View {
     let actionDescription: String
     let stepNumber: Int
-    let onApprove: () -> Void
-    let onDecline: () -> Void
+    let onAnswer: (ActionConfirmationAnswer) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -104,16 +109,18 @@ private struct ActionConfirmationCard: View {
                 .foregroundColor(.white)
                 .lineLimit(2)
             HStack {
-                Button("Nu", action: onDecline)
+                Button("Nu") { onAnswer(.declined) }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Da, fă-o", action: onApprove)
+                Button("Da pentru tot") { onAnswer(.approvedForRestOfTask) }
+                    .help("Aprobă și următorii pași ai acestei cereri")
+                Button("Da") { onAnswer(.approved) }
                     .keyboardShortcut(.defaultAction)
             }
             .controlSize(.regular)
         }
         .padding(14)
-        .frame(width: 300, height: 118, alignment: .topLeading)
+        .frame(width: 340, height: 118, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.black.opacity(0.9))

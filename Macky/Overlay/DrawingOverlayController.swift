@@ -1,72 +1,73 @@
 import AppKit
 import MackyCore
 
-/// Lets the user circle or underline something with the mouse while holding the talk hotkey.
-/// During the hold, a transparent window per screen catches mouse drags (so drawing does not
-/// click the app underneath). Afterwards the strokes stay visible, but the windows let every
-/// click through again, until the answer is finished.
+/// Lets the user mark something on screen while holding the talk hotkey: the mouse pointer
+/// leaves a trail as it moves, no clicking needed. The trail disappears as soon as the keys
+/// are released; the strokes are kept in memory so they can be painted into the screenshot.
+/// The windows never catch the mouse, so clicks always reach the apps underneath.
 @MainActor
 final class DrawingOverlayController {
     /// Strokes in AppKit global coordinates.
     private(set) var strokes: [[CGPoint]] = []
     private var drawingWindows: [NSPanel] = []
-    private var isAcceptingInput = false
+    private var mouseTrackingTimer: Timer?
+    /// Points closer than this to the previous one are skipped, so a still mouse draws nothing.
+    private static let minimumPointSpacing: CGFloat = 1.5
 
-    /// Strokes big enough to be intentional (a plain click is not a drawing).
+    /// Strokes big enough to be intentional (a slightly nudged mouse is not a drawing).
     var meaningfulStrokes: [[CGPoint]] {
         strokes.filter { stroke in
             guard stroke.count >= 3 else { return false }
             let bounds = Self.boundingBox(of: stroke)
-            return bounds.width >= 12 || bounds.height >= 12
+            return bounds.width >= 20 || bounds.height >= 20
         }
     }
 
     func beginDrawingSession() {
-        strokes.removeAll()
+        stopTrackingMouse()
+        // The trail starts where the mouse is when the keys go down.
+        strokes = [[NSEvent.mouseLocation]]
         rebuildWindowsIfNeeded()
-        isAcceptingInput = true
         for drawingWindow in drawingWindows {
-            drawingWindow.ignoresMouseEvents = false
             drawingWindow.contentView?.needsDisplay = true
             drawingWindow.orderFrontRegardless()
         }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recordMousePosition()
+            }
+        }
+        mouseTrackingTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    /// Stops catching the mouse but keeps the drawing on screen.
+    /// Stops drawing and removes the trail from the screen. `strokes` keeps the drawing until the next session.
     func endDrawingSession() {
-        isAcceptingInput = false
-        for drawingWindow in drawingWindows {
-            drawingWindow.ignoresMouseEvents = true
-        }
-        if strokes.isEmpty {
-            hideWindows()
-        }
+        stopTrackingMouse()
+        hideWindows()
     }
 
     func clear() {
-        isAcceptingInput = false
+        stopTrackingMouse()
         strokes.removeAll()
         hideWindows()
     }
 
-    // MARK: Called by the canvas views
-
-    fileprivate func startStroke(at globalPoint: CGPoint) {
-        guard isAcceptingInput else { return }
-        strokes.append([globalPoint])
-        redrawAll()
-    }
-
-    fileprivate func continueStroke(to globalPoint: CGPoint) {
-        guard isAcceptingInput, !strokes.isEmpty else { return }
-        strokes[strokes.count - 1].append(globalPoint)
-        redrawAll()
-    }
+    fileprivate var strokesToDraw: [[CGPoint]] { strokes }
 
     // MARK: Private
 
-    private func redrawAll() {
+    private func recordMousePosition() {
+        let mouseLocation = NSEvent.mouseLocation
+        guard !strokes.isEmpty, let lastPoint = strokes[strokes.count - 1].last else { return }
+        guard hypot(mouseLocation.x - lastPoint.x, mouseLocation.y - lastPoint.y) >= Self.minimumPointSpacing else { return }
+        strokes[strokes.count - 1].append(mouseLocation)
         drawingWindows.forEach { $0.contentView?.needsDisplay = true }
+    }
+
+    private func stopTrackingMouse() {
+        mouseTrackingTimer?.invalidate()
+        mouseTrackingTimer = nil
     }
 
     private func hideWindows() {
@@ -88,9 +89,9 @@ final class DrawingOverlayController {
             defer: false
         )
         drawingWindow.isOpaque = false
-        // Almost transparent instead of fully clear: fully clear windows let clicks fall through.
-        drawingWindow.backgroundColor = NSColor.black.withAlphaComponent(0.001)
+        drawingWindow.backgroundColor = .clear
         drawingWindow.hasShadow = false
+        drawingWindow.ignoresMouseEvents = true
         drawingWindow.level = .statusBar
         drawingWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         drawingWindow.hidesOnDeactivate = false
@@ -117,28 +118,12 @@ final class DrawingOverlayController {
     }
 }
 
-/// Catches the mouse and paints every stroke that crosses this screen.
+/// Paints every stroke that crosses this screen.
 private final class DrawingCanvasView: NSView {
     weak var controller: DrawingOverlayController?
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let globalPoint = globalPoint(of: event) else { return }
-        MainActor.assumeIsolated { controller?.startStroke(at: globalPoint) }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let globalPoint = globalPoint(of: event) else { return }
-        MainActor.assumeIsolated { controller?.continueStroke(to: globalPoint) }
-    }
-
     override func draw(_ dirtyRect: NSRect) {
-        guard let window, let strokes = MainActor.assumeIsolated({ controller?.strokes }) else { return }
+        guard let window, let strokes = MainActor.assumeIsolated({ controller?.strokesToDraw }) else { return }
         let windowOrigin = window.frame.origin
         let accentColor = NSColor(calibratedRed: 0.20, green: 0.84, blue: 0.70, alpha: 1)
 
@@ -159,10 +144,5 @@ private final class DrawingCanvasView: NSView {
             accentColor.setStroke()
             path.stroke()
         }
-    }
-
-    private func globalPoint(of event: NSEvent) -> CGPoint? {
-        guard let window else { return nil }
-        return window.convertToScreen(NSRect(origin: event.locationInWindow, size: .zero)).origin
     }
 }

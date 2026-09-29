@@ -121,7 +121,7 @@ final class CompanionOverlayController {
     // MARK: Pointing
 
     /// Flies the cursor to `targetPoint` along an arc, then shows the highlight and label.
-    func flyCursor(to targetPoint: CGPoint, highlightRect: CGRect?, label: String) async {
+    func flyCursor(to targetPoint: CGPoint, highlightRect: CGRect?, label: String, maximumFlightDuration: Double = 0.9) async {
         cancelPendingHide()
         stopFollowingMouse()
         stopFlight()
@@ -136,7 +136,7 @@ final class CompanionOverlayController {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
         if !reduceMotion && travelDistance > 2 {
-            let flightDuration = min(max(travelDistance / 1400, 0.35), 0.9)
+            let flightDuration = min(max(travelDistance / 1400, 0.2), maximumFlightDuration)
             let flightStartDate = Date()
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 flightCompletion = continuation

@@ -19,6 +19,8 @@ public enum ScreenAction: Equatable, Sendable {
     case click(target: PointingInstruction, kind: ClickKind)
     case typeText(text: String, pressEnterAfterwards: Bool)
     case pressKeys(KeyCombination)
+    case openApplication(name: String)
+    case openURL(String)
 
     /// Parses an action tool call. Returns nil for `point_at` or malformed arguments.
     public init?(toolCall: ChatToolCall) {
@@ -38,6 +40,12 @@ public enum ScreenAction: Equatable, Sendable {
         case .pressKeys:
             guard let keys = arguments["keys"] as? String, let combination = KeyCombination(parsing: keys) else { return nil }
             self = .pressKeys(combination)
+        case .openApplication:
+            guard let name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
+            self = .openApplication(name: name)
+        case .openURL:
+            guard let url = (arguments["url"] as? String)?.trimmingCharacters(in: .whitespaces), url.contains(":") else { return nil }
+            self = .openURL(url)
         case .pointAt:
             return nil
         }
@@ -53,6 +61,11 @@ public enum ScreenAction: Equatable, Sendable {
             return "Scrie „\(shortenedText)”" + (pressEnterAfterwards ? " și apasă Enter" : "")
         case .pressKeys(let combination):
             return "Apasă \(combination.displayName)"
+        case .openApplication(let name):
+            return "Deschide \(name)"
+        case .openURL(let url):
+            let shortenedURL = url.count > 70 ? String(url.prefix(70)) + "…" : url
+            return "Deschide \(shortenedURL)"
         }
     }
 }

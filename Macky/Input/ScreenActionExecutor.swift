@@ -53,6 +53,53 @@ final class ScreenActionExecutor {
         keyUpEvent?.post(tap: .cgAnnotatedSessionEventTap)
     }
 
+    /// Launches or brings forward an app by name. Returns false when no such app is installed.
+    func openApplication(named name: String) async -> Bool {
+        guard let applicationURL = Self.findApplication(named: name) else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        do {
+            _ = try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Opens a web page or app link (spotify:, mailto:, ...). Spaces in search terms are encoded.
+    func openURL(_ text: String) -> Bool {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = URL(string: trimmedText) ?? URL(string: trimmedText.replacingOccurrences(of: " ", with: "%20"))
+        guard let url, url.scheme != nil else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
+    private static func findApplication(named name: String) -> URL? {
+        let wantedName = name.lowercased().replacingOccurrences(of: ".app", with: "").trimmingCharacters(in: .whitespaces)
+        if let runningApplication = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName?.lowercased() == wantedName }),
+           let bundleURL = runningApplication.bundleURL {
+            return bundleURL
+        }
+
+        let searchDirectories = [
+            "/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities",
+            NSHomeDirectory() + "/Applications"
+        ]
+        var partialMatch: URL?
+        for directory in searchDirectories {
+            guard let fileNames = try? FileManager.default.contentsOfDirectory(atPath: directory) else { continue }
+            for fileName in fileNames where fileName.hasSuffix(".app") {
+                let applicationName = String(fileName.dropLast(4)).lowercased()
+                let applicationURL = URL(fileURLWithPath: directory).appendingPathComponent(fileName)
+                if applicationName == wantedName { return applicationURL }
+                if partialMatch == nil && (applicationName.contains(wantedName) || wantedName.contains(applicationName)) {
+                    partialMatch = applicationURL
+                }
+            }
+        }
+        return partialMatch
+    }
+
     private func postClick(at quartzPoint: CGPoint, button: CGMouseButton, clickCount: Int64, eventSource: CGEventSource?) {
         let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
         let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp

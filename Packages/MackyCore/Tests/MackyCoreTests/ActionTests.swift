@@ -19,6 +19,15 @@ final class ScreenActionTests: XCTestCase {
                        .pressKeys(KeyCombination(keyCode: 45, modifiers: [.command, .shift], displayName: "⇧⌘N")))
     }
 
+    func testParsesOpenApplicationAndOpenURL() {
+        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "g", name: "open_app", argumentsJSON: #"{"name":" Spotify "}"#)),
+                       .openApplication(name: "Spotify"))
+        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "h", name: "open_url", argumentsJSON: #"{"url":"spotify:search:queen"}"#)),
+                       .openURL("spotify:search:queen"))
+        XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "i", name: "open_url", argumentsJSON: #"{"url":"not a url"}"#)))
+        XCTAssertEqual(ScreenAction.openApplication(name: "Spotify").userFacingDescription, "Deschide Spotify")
+    }
+
     func testPointAtAndBrokenActionsAreNotActions() {
         XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "d", name: "point_at", argumentsJSON: #"{"x":1,"y":2}"#)))
         XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "e", name: "type_text", argumentsJSON: #"{}"#)))
@@ -57,7 +66,7 @@ final class ToolConversationEncodingTests: XCTestCase {
         XCTAssertEqual(encodedMessages[1]["content"] as? String, "Clicked.")
 
         let toolNames = (json["tools"] as? [[String: Any]])?.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
-        XCTAssertEqual(toolNames, ["point_at", "click", "type_text", "press_keys"])
+        XCTAssertEqual(toolNames, ["point_at", "click", "type_text", "press_keys", "open_app", "open_url"])
     }
 
     func testPromptMentionsActionsAndMarkings() {

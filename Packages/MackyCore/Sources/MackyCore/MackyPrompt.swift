@@ -74,9 +74,9 @@ public enum MackyPrompt {
           3. press_keys for keyboard shortcuts, type_text for text.
           4. run_applescript for simple app control (next track, pause, open a document).
           5. click with coordinates only when the element has no usable name.
-        - Recipes:
-          Play Liked Songs on Spotify: open_url "spotify:collection:tracks", click_element label "Play" app "Spotify", task_done.
-          Play a song on Spotify: open_url "spotify:search:SONG NAME", click_element label "Play" app "Spotify", task_done.
+        - Music and Spotify: ALWAYS use the spotify tool (play by name, Liked Songs, pause, next...), never clicks. Call it with task_done in the same response.
+          The spotify tool result says what is really playing; if it reports a failure, tell the user honestly.
+        - Never claim something worked unless the tool result confirms it.
         - Call several action tools in the same response whenever you can predict the result (for example click a search field, type_text, press enter).
         - When your actions in this response certainly finish the task, also call task_done in the same response: then you will not get another screenshot and the task ends immediately. Only skip task_done when you really need to see the result.
         - Otherwise you receive a new screenshot after your actions: check it and continue.

@@ -8,10 +8,13 @@ struct SettingsView: View {
     @ObservedObject var apiKeyStore: OpenRouterAPIKeyStore
     @ObservedObject var modelCatalogStore: ModelCatalogStore
     @ObservedObject var session: CompanionSession
+    @ObservedObject var spotifyCredentialsStore: SpotifyCredentialsStore
     let openRouterClient: OpenRouterClient
 
     var body: some View {
         TabView {
+            SpotifySettingsTab(credentialsStore: spotifyCredentialsStore)
+                .tabItem { Label("Spotify", systemImage: "music.note") }
             OpenRouterSettingsTab(settings: settings, apiKeyStore: apiKeyStore, modelCatalogStore: modelCatalogStore, openRouterClient: openRouterClient)
                 .tabItem { Label("AI", systemImage: "sparkles") }
             VoiceSettingsTab(settings: settings, session: session)
@@ -393,5 +396,85 @@ private struct GeneralSettingsTab: View {
             launchAtLoginError = "Nu am putut schimba pornirea la login: \(error.localizedDescription)"
         }
         launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
+    }
+}
+
+// MARK: - Spotify
+
+private struct SpotifySettingsTab: View {
+    @ObservedObject var credentialsStore: SpotifyCredentialsStore
+    @State private var clientIdentifierDraft = ""
+    @State private var clientSecretDraft = ""
+    @State private var statusText: String?
+    @State private var isTesting = false
+
+    var body: some View {
+        Form {
+            Section("Cum merge") {
+                Text("Macky controlează Spotify direct (fără click-uri) și verifică de fiecare dată ce cântă. Spune de exemplu: „pune Numb de la Linkin Park”, „pornește Liked Songs”, „ceva de la Queen”, „următoarea melodie”.")
+                    .font(.callout)
+                Text("Pentru căutare precisă după nume, Macky are nevoie de o aplicație Spotify pentru dezvoltatori (gratuită, nu cere Premium). Fără ea merg Liked Songs, pauză, următoarea, dar căutarea e mai puțin sigură.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
+            Section("Date aplicație Spotify (o singură dată, ~3 minute)") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("1. Deschide developer.spotify.com/dashboard și intră cu contul tău Spotify.")
+                    Text("2. Create app → nume „Macky”, descriere orice, Redirect URI: http://127.0.0.1:8888/callback, bifează „Web API” → Save.")
+                    Text("3. Intră în aplicație → Settings → copiază Client ID și Client secret aici.")
+                }
+                .font(.caption)
+                Link("Deschide Spotify Developer Dashboard", destination: URL(string: "https://developer.spotify.com/dashboard")!)
+
+                TextField(credentialsStore.hasCredentials ? "Client ID (salvat)" : "Client ID", text: $clientIdentifierDraft)
+                    .textFieldStyle(.roundedBorder)
+                SecureField(credentialsStore.hasCredentials ? "Client secret (salvat)" : "Client secret", text: $clientSecretDraft)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Salvează") { saveCredentials() }
+                        .disabled(clientIdentifierDraft.trimmingCharacters(in: .whitespaces).isEmpty || clientSecretDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(isTesting ? "Testez…" : "Testează căutarea") { Task { await testSearch() } }
+                        .disabled(!credentialsStore.hasCredentials || isTesting)
+                    if credentialsStore.hasCredentials {
+                        Button("Șterge", role: .destructive) {
+                            credentialsStore.remove()
+                            statusText = nil
+                        }
+                    }
+                }
+                if let statusText {
+                    Text(statusText).font(.callout).foregroundColor(.secondary)
+                }
+            }
+
+            Section("Permisiune") {
+                Text("Prima dată când Macky controlează Spotify, macOS întreabă „Macky wants to control Spotify”. Apasă OK. Dacă ai apăsat „Don't Allow”, reactivează din System Settings → Privacy & Security → Automation → Macky.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func saveCredentials() {
+        do {
+            try credentialsStore.save(clientIdentifier: clientIdentifierDraft, clientSecret: clientSecretDraft)
+            clientIdentifierDraft = ""
+            clientSecretDraft = ""
+            Task { await testSearch() }
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    private func testSearch() async {
+        guard let clientIdentifier = credentialsStore.clientIdentifier, let clientSecret = credentialsStore.clientSecret else { return }
+        isTesting = true
+        defer { isTesting = false }
+        do {
+            let result = try await SpotifyWebAPIClient().search(query: "Numb Linkin Park", kind: .track, clientIdentifier: clientIdentifier, clientSecret: clientSecret)
+            statusText = "✓ Funcționează. Test: am găsit „\(result.name)”\(result.artistName.map { " – \($0)" } ?? "")."
+        } catch {
+            statusText = "✗ \(error.localizedDescription)"
+        }
     }
 }

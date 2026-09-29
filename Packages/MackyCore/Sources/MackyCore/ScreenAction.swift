@@ -24,6 +24,7 @@ public enum ScreenAction: Equatable, Sendable {
     case runAppleScript(String)
     /// Presses an element found by name in the accessibility tree; nil application means the app in front.
     case clickElement(label: String, applicationName: String?)
+    case spotify(SpotifyCommand)
     /// Plays, pauses or skips in whatever app is playing media (the keyboard's media keys).
     case mediaKey(MediaKey)
 
@@ -58,6 +59,9 @@ public enum ScreenAction: Equatable, Sendable {
             guard let label = (arguments["label"] as? String)?.trimmingCharacters(in: .whitespaces), !label.isEmpty else { return nil }
             let applicationName = (arguments["app"] as? String)?.trimmingCharacters(in: .whitespaces)
             self = .clickElement(label: label, applicationName: (applicationName?.isEmpty ?? true) ? nil : applicationName)
+        case .spotify:
+            guard let command = SpotifyCommand(toolArgumentsJSON: toolCall.argumentsJSON) else { return nil }
+            self = .spotify(command)
         case .pointAt, .taskDone:
             return nil
         }
@@ -86,6 +90,8 @@ public enum ScreenAction: Equatable, Sendable {
             return applicationName.map { "Apasă „\(label)” în \($0)" } ?? "Apasă „\(label)”"
         case .mediaKey(let mediaKey):
             return mediaKey.displayName
+        case .spotify(let command):
+            return command.userFacingDescription
         }
     }
 }

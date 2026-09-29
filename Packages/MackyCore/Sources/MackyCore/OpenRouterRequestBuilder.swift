@@ -10,11 +10,12 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case openURL = "open_url"
     case runAppleScript = "run_applescript"
     case clickElement = "click_element"
+    case spotify = "spotify"
     /// Not an action: the model calls it next to its last actions to say no check is needed.
     case taskDone = "task_done"
 
     /// Tools that change something on the computer (as opposed to only showing).
-    public static let actionTools: [MackyTool] = [.clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
+    public static let actionTools: [MackyTool] = [.spotify, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
 
@@ -124,6 +125,16 @@ public enum OpenRouterRequestBuilder {
                 "app": ["type": "string", "description": "Application to look in, e.g. 'Spotify'. Omit for the app in front."]
             ]
             required = ["label"]
+        case .spotify:
+            description = "Controls the Spotify app directly and reliably (no clicking): plays a song, album, artist or playlist by name, "
+                + "plays the user's Liked Songs, pauses, resumes or skips. It checks what is actually playing and reports it. "
+                + "ALWAYS use this for anything about Spotify or playing music."
+            properties = [
+                "action": ["type": "string", "enum": ["play", "play_liked_songs", "pause", "resume", "next", "previous"]],
+                "query": ["type": "string", "description": "For action=play: what to search, e.g. 'Numb Linkin Park'."],
+                "kind": ["type": "string", "enum": ["track", "album", "artist", "playlist"], "description": "For action=play; default track."]
+            ]
+            required = ["action"]
         case .taskDone:
             description = "Call this in the same response as your final actions when they certainly complete the task, "
                 + "so no new screenshot is needed. Do not call it if you need to check the result."

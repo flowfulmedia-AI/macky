@@ -32,6 +32,7 @@ final class CompanionSession: ObservableObject {
     private let actionConfirmationController = ActionConfirmationController()
     private let screenActionExecutor: ScreenActionExecutor
     private let accessibilityElementFinder = AccessibilityElementFinder()
+    private let spotifyController: SpotifyController
 
     private var transcriber: SpeechTranscriber?
     private var transcriberConfigurationKey = ""
@@ -57,6 +58,7 @@ final class CompanionSession: ObservableObject {
 
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
+         spotifyCredentialsStore: SpotifyCredentialsStore,
          openRouterClient: OpenRouterClient) {
         self.settings = settings
         self.apiKeyStore = apiKeyStore
@@ -65,6 +67,12 @@ final class CompanionSession: ObservableObject {
         self.drawingOverlayController = drawingOverlayController
         self.openRouterClient = openRouterClient
         self.screenActionExecutor = ScreenActionExecutor(textInserter: dictationTextInserter)
+        self.spotifyController = SpotifyController(
+            executor: screenActionExecutor,
+            elementFinder: accessibilityElementFinder,
+            credentialsStore: spotifyCredentialsStore
+        )
+        spotifyController.warmUp()
 
         audioRecorder.onAudioLevel = { [weak overlayController] audioLevel in
             overlayController?.setAudioLevel(audioLevel)
@@ -220,6 +228,13 @@ final class CompanionSession: ObservableObject {
                 interactionTimings?.transcriptionFinishedDate = Date()
                 guard isCurrent(interactionIdentifier), let transcript else { return }
 
+                // Music requests go straight to Spotify: no screenshot, no model, verified playback.
+                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+                   let spotifyCommand = SpotifyCommandMatcher.match(transcript) {
+                    await runSpotifyCommand(spotifyCommand, question: transcript, interactionIdentifier: interactionIdentifier)
+                    return
+                }
+
                 // Simple commands ("pauză", "deschide Safari") run instantly, without screenshot or model.
                 if settings.quickCommandsEnabled && settings.actionMode != .disabled,
                    let quickCommand = QuickCommandMatcher.match(transcript),
@@ -239,6 +254,34 @@ final class CompanionSession: ObservableObject {
                 state = .idle
                 overlayController.endInteraction(afterDelay: 1.2)
             }
+        }
+    }
+
+    /// Says a short "Sigur, pornesc acum!" right away, then drives Spotify and only speaks again if it failed.
+    private func runSpotifyCommand(_ spotifyCommand: SpotifyCommand, question: String, interactionIdentifier: UUID) async {
+        lastQuestionText = question
+        lastAnswerText = ""
+        isAnswerStreamComplete = false
+        switch spotifyCommand {
+        case .play, .playLikedSongs, .resume: showAndSpeak("Sigur, pornesc acum!")
+        case .pause, .nextTrack, .previousTrack: showAndSpeak("Sigur!")
+        }
+        interactionTimings?.firstResponseDate = Date()
+
+        let outcome = await spotifyController.perform(spotifyCommand)
+        guard isCurrent(interactionIdentifier) else { return }
+        interactionTimings?.workFinishedDate = Date()
+        if outcome.succeeded {
+            // What is playing is shown, not read out.
+            lastAnswerText += " " + outcome.message
+            overlayController.setBubbleText(lastAnswerText)
+        } else {
+            showAndSpeak(outcome.message)
+        }
+        conversationHistory.record(userText: question, assistantText: lastAnswerText)
+        isAnswerStreamComplete = true
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
         }
     }
 
@@ -736,6 +779,10 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: scriptResult.output)
         case .mediaKey(let mediaKey):
             screenActionExecutor.press(mediaKey)
+        case .spotify(let spotifyCommand):
+            let outcome = await spotifyController.perform(spotifyCommand)
+            guard outcome.succeeded else { return .failed(outcome.message) }
+            return .done(action.userFacingDescription, resultDetail: outcome.message)
         case .clickElement(let label, let applicationName):
             let pressResult = await accessibilityElementFinder.pressElement(label: label, applicationName: applicationName)
             guard pressResult.succeeded else {

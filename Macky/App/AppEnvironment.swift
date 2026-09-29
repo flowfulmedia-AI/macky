@@ -8,6 +8,7 @@ import SwiftUI
 final class AppEnvironment {
     let settings = AppSettings()
     let apiKeyStore = OpenRouterAPIKeyStore()
+    let spotifyCredentialsStore = SpotifyCredentialsStore()
     let permissions = PermissionsManager()
     let openRouterClient = OpenRouterClient()
     let modelCatalogStore: ModelCatalogStore
@@ -30,6 +31,7 @@ final class AppEnvironment {
             modelCatalogStore: modelCatalogStore,
             overlayController: overlayController,
             drawingOverlayController: drawingOverlayController,
+            spotifyCredentialsStore: spotifyCredentialsStore,
             openRouterClient: openRouterClient
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
@@ -147,6 +149,7 @@ final class AppEnvironment {
                 apiKeyStore: apiKeyStore,
                 modelCatalogStore: modelCatalogStore,
                 session: companionSession,
+                spotifyCredentialsStore: spotifyCredentialsStore,
                 openRouterClient: openRouterClient
             )
         }

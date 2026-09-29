@@ -28,14 +28,20 @@ final class AccessibilityElementFinder: @unchecked Sendable {
     private static let pollInterval: TimeInterval = 0.25
 
     func pressElement(label: String, applicationName: String?, timeout: TimeInterval = 4) async -> PressResult {
+        await pressElement(anyOf: [label], applicationName: applicationName, timeout: timeout)
+    }
+
+    /// Several names for the same thing, e.g. ["Play", "Redă"] when the app's language is unknown.
+    func pressElement(anyOf labels: [String], applicationName: String?, timeout: TimeInterval = 4) async -> PressResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: self.pressElementWaitingForIt(label: label, applicationName: applicationName, timeout: timeout))
+                continuation.resume(returning: self.pressElementWaitingForIt(labels: labels, applicationName: applicationName, timeout: timeout))
             }
         }
     }
 
-    private func pressElementWaitingForIt(label: String, applicationName: String?, timeout: TimeInterval) -> PressResult {
+    private func pressElementWaitingForIt(labels: [String], applicationName: String?, timeout: TimeInterval) -> PressResult {
+        let label = labels.joined(separator: " / ")
         let deadline = Date().addingTimeInterval(timeout)
         var availableNames: [String] = []
         var foundApplication = false
@@ -51,7 +57,7 @@ final class AccessibilityElementFinder: @unchecked Sendable {
                     AXUIElementSetAttributeValue(applicationElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
                     enabledChromiumAccessibilityForProcess = application.processIdentifier
                 }
-                let searchResult = Self.search(in: applicationElement, wantedLabel: label)
+                let searchResult = Self.search(in: applicationElement, wantedLabels: labels)
                 availableNames = searchResult.availableNames
                 if let bestMatch = searchResult.bestMatch, Self.press(bestMatch) {
                     return PressResult(succeeded: true, message: "Pressed \"\(bestMatch.name)\".")
@@ -81,7 +87,7 @@ final class AccessibilityElementFinder: @unchecked Sendable {
     }
 
     /// Breadth-first walk of the app's windows, scoring every pressable element against the wanted name.
-    private static func search(in applicationElement: AXUIElement, wantedLabel: String) -> (bestMatch: Candidate?, availableNames: [String]) {
+    private static func search(in applicationElement: AXUIElement, wantedLabels: [String]) -> (bestMatch: Candidate?, availableNames: [String]) {
         var queue: [AXUIElement] = windows(of: applicationElement)
         if queue.isEmpty { queue = [applicationElement] }
         // The menu bar holds commands like "File > New" that are useful to press too.
@@ -104,7 +110,7 @@ final class AccessibilityElementFinder: @unchecked Sendable {
             if availableNames.count < 60 && !availableNames.contains(displayName) {
                 availableNames.append(displayName)
             }
-            guard let score = ElementLabelMatcher.score(elementTexts: texts, wantedLabel: wantedLabel),
+            guard let score = wantedLabels.compactMap({ ElementLabelMatcher.score(elementTexts: texts, wantedLabel: $0) }).max(),
                   let frame = attributes.frame, frame.width > 1, frame.height > 1 else { continue }
             let candidate = Candidate(element: element, name: displayName, score: score, frameInQuartzCoordinates: frame)
             // Best text match wins; among equals, the biggest element (e.g. the big Play button, not a row's).

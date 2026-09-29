@@ -1,90 +1,112 @@
-# Macky — plan de implementare MVP
+# Macky — plan de implementare MVP (uz personal)
 
 > Asistent AI pentru macOS care stă lângă cursor, vede ecranul, te ascultă, îți răspunde cu voce
-> și **arată cu cursorul** unde să apeși. Funcționalitate echivalentă cu HeyClicky, identitate proprie.
+> și **arată cu cursorul** unde să apeși. Funcționalitate echivalentă cu HeyClicky, pentru un singur utilizator.
+
+**Constrângeri:**
+- Aplicație **personală**: nu se vinde, nu se distribuie, rulează doar pe Mac-ul meu.
+- **Fără costuri fixe**: fără abonamente, fără cont Apple Developer plătit, fără servere.
+- Singurul cost variabil: **creditele OpenRouter existente**, consumate doar când pun o întrebare.
 
 Surse: blueprint-ul intern „Asistent Mac cu voce și ecran” (29.09.2026), pagina publică heyclicky.com
 (prin recenzii și listări), plus repo-ul open-source al primei versiuni Clicky (`farzaa/clicky`, licență MIT).
 
 ---
 
-## 1. Ce face HeyClicky (reperul nostru)
+## 1. Ce face HeyClicky și ce preluăm
 
 | Funcție | Cum arată la ei | În MVP-ul Macky? |
 |---|---|---|
 | Push-to-talk global | Ții apăsat `Control + Option`, vorbești, eliberezi | **Da** |
 | Vede ecranul | Screenshot la fiecare întrebare, toate monitoarele | **Da** |
-| Răspuns vocal + text | Bulă de text lângă cursor + voce (TTS) | **Da** |
-| Arată cu cursorul | Un cursor animat „zboară” spre butonul corect | **Da** — funcția-vedetă |
+| Răspuns vocal + text | Bulă de text lângă cursor + voce | **Da** |
+| Arată cu cursorul | Un cursor animat „zboară” spre butonul corect | **Da**, funcția-vedetă |
 | Conversație continuă | Ține minte replicile anterioare din sesiune | **Da** (în memorie, per sesiune) |
-| Dictare | Vorbești și textul apare în aplicația activă | **Da** (simplu, fără AI) |
+| Dictare | Vorbești și textul apare în aplicația activă | **Da** (gratuit, local) |
 | Desen pe ecran | Cerc / săgeată / highlight peste o zonă | Parțial: highlight dreptunghi |
-| Mod Agent („clicky agent”) | Face sarcini: cercetare, Notes/Calendar, click-uri | **Nu** — v2 |
-| Planuri Free / Pro / Max | 25 talk + 25 agent gratis; $20; $100 | Doar cote simple — billing în v2 |
+| Mod Agent („clicky agent”) | Face sarcini: cercetare, Notes/Calendar, click-uri | **Nu**, v2 |
+| Planuri Free / Pro / Max | Cote și abonamente | **Nu e cazul**: uz personal |
 
-Stack-ul lor cunoscut: SwiftUI + AppKit, ScreenCaptureKit, Claude (viziune + raționament),
-AssemblyAI (speech-to-text streaming), ElevenLabs (text-to-speech), un proxy Cloudflare Worker
-care ține cheile API. Aplicația stă doar în menu bar (fără icon în Dock).
+Stack-ul lor: SwiftUI + AppKit, ScreenCaptureKit, Claude, AssemblyAI (plătit), ElevenLabs (plătit),
+proxy Cloudflare. **Noi înlocuim tot ce e plătit** cu echivalente locale, mai puțin modelul AI, care trece prin OpenRouter.
 
 ---
 
 ## 2. Decizii de arhitectură
 
-### 2.1 Aplicația Mac: Swift nativ (SwiftUI + AppKit)
-Tot ce contează aici e nativ: ScreenCaptureKit, Accessibility (AX), ferestre overlay care nu fură
-focusul, hotkey global prin `CGEvent` tap. Electron/Tauri ar cere oricum bridge nativ pentru toate astea.
-- macOS minim: **14.2** (ScreenCaptureKit modern).
-- Tip aplicație: menu bar only (`LSUIElement = true`).
+### 2.1 Aplicația Mac: Swift nativ (SwiftUI + AppKit), fără backend
+- Menu bar only (`LSUIElement = true`), macOS **14.2+**. Recomandat Apple Silicon (pentru transcrierea locală).
+- **Fără server/proxy.** Proxy-ul exista la Clicky ca să ascundă cheile de utilizatori. Aici singurul
+  utilizator ești tu, deci aplicația apelează direct OpenRouter. Cheia se introduce o dată în Setări și
+  se păstrează în **Keychain**. Nu apare în cod, nu intră în repo.
 
-### 2.2 Vocea: STT → Claude → TTS (varianta B din blueprint), nu Realtime API
-Blueprint-ul propune ca variantă A OpenAI Realtime. Pentru MVP recomand varianta B, cea pe care o folosește
-și Clicky, pentru că:
-- interacțiunea e **push-to-talk** (turn-uri clare), deci avantajul Realtime (întreruperi naturale, VAD) contează puțin;
-- fiecare turn are nevoie de **screenshot + viziune + coordonate de pointing**, adică exact ce face bine un apel Claude cu imagine;
-- fiecare verigă se poate testa și înlocui separat.
+### 2.2 Modelul AI: OpenRouter ca furnizor principal, cu abstracție de provider
+OpenRouter expune un API compatibil OpenAI (`/api/v1/chat/completions`), cu streaming SSE,
+imagini și tool calling, și dă acces la Claude, Gemini, GPT, Qwen etc. **din aceleași credite**.
 
-Pipeline: `mic (AVAudioEngine) → STT streaming (websocket) → transcript final la eliberarea tastei
-→ Claude (text + screenshot, streaming SSE) → TTS pe propoziții → redare audio + animație cursor`.
+```swift
+protocol LLMProvider {
+    func streamResponse(messages: [ChatMessage], screenshots: [CapturedScreen],
+                        tools: [ToolDefinition]) -> AsyncThrowingStream<LLMEvent, Error>
+}
+// OpenRouterProvider  (implicit)
+// AnthropicProvider   (opțional, dacă vreodată ai cheie Anthropic directă)
+```
 
-Pentru latență: TTS pornește pe **prima propoziție completă** din stream, nu după tot răspunsul.
-Țintă: < 1,5 s de la eliberarea tastei până la primul sunet.
+- **Modelul se alege din Setări** (listă luată din `GET /api/v1/models`, filtrată pe modele cu
+  suport de imagine). Setări separate pentru „model rapid” (întrebări obișnuite) și „model puternic”
+  (comutat din panou sau prin comandă vocală).
+- Recomandare de pornire: un model Claude Sonnet prin OpenRouter pentru calitate + un model Gemini Flash
+  pentru cost mic; le comparăm în Etapa 3 pe precizia pointing-ului. Se pot testa și modelele `:free`
+  de pe OpenRouter (au limite stricte de rată, deci doar ca rezervă).
+- **Controlul costului:** screenshot redimensionat (latura maximă ~1280 px), doar monitorul activ implicit,
+  istoric de conversație scurtat la ultimele N replici, afișarea costului per răspuns
+  (OpenRouter îl raportează în `usage`) și total pe sesiune în panou.
 
-Furnizori (fiecare în spatele unui protocol Swift, ca să poată fi schimbat):
-- STT: AssemblyAI streaming (principal), Apple Speech (fallback offline/gratuit).
-- LLM: Claude — Sonnet ca implicit (viteză/cost), Opus opțional pentru întrebări grele.
-- TTS: ElevenLabs Flash (principal), `AVSpeechSynthesizer` (fallback).
+### 2.3 Vocea: totul local și gratuit
+Pipeline: `mic (AVAudioEngine) → transcriere locală → model AI prin OpenRouter (text + screenshot, streaming)
+→ voce locală, pe propoziții → redare + animație cursor`.
 
-### 2.3 Backend: proxy subțire, fără chei în aplicație
-Cheile API **nu ajung niciodată** în aplicația distribuită. Un Cloudflare Worker (TypeScript) cu rute:
-
-| Rută | Upstream | Rol |
+| Verigă | Principal (gratuit) | Rezervă |
 |---|---|---|
-| `POST /v1/chat` | Anthropic Messages API | viziune + streaming, system prompt ținut pe server |
-| `POST /v1/tts` | ElevenLabs | audio pentru un fragment de text |
-| `POST /v1/stt-token` | AssemblyAI | token efemer (~8 min) pentru websocket |
-| `POST /v1/auth/device` | — | înregistrare dispozitiv anonim, emite token |
+| Speech-to-text | **WhisperKit** (Whisper rulat local pe Apple Silicon, MIT, știe română) | Apple Speech (`SFSpeechRecognizer`) |
+| Text-to-speech | **`AVSpeechSynthesizer`** cu o voce „Enhanced/Premium” descărcată gratuit din Setări macOS (ex. Ioana pentru română) | voci locale Piper (v2) |
 
-Plus: autentificare per dispozitiv, **cote lunare** (ex. 25 întrebări gratis) în Cloudflare KV/D1,
-rate-limit, fără logare de imagini sau audio.
+- WhisperKit: model `small` sau `base` pentru viteză; se descarcă o singură dată (~250–500 MB).
+- Push-to-talk înseamnă transcriere pe bucata înregistrată la eliberarea tastei, deci nu e nevoie de streaming STT.
+- Vocea pornește pe **prima propoziție completă** din stream, nu după tot răspunsul.
+- Țintă latență: < 2 s de la eliberarea tastei până la primul sunet.
 
 ### 2.4 Pointing: coordonate din viziune, „lipite” de elemente reale prin Accessibility
-Asta e diferențiatorul și partea cea mai delicată.
-1. Capturăm fiecare monitor, redimensionăm la o latură maximă cunoscută și **păstrăm metadatele**:
-   `display_id`, originea globală, bounds, scale factor (Retina), dimensiunea trimisă modelului.
-2. Claude răspunde cu text vorbit + un **tool call structurat** `point_at({screen, x, y, label})`
-   (mai robust decât taguri `[POINT:…]` parsate din text).
-3. Transformare: pixel imagine → anulare redimensionare → punct în captură → punct global macOS → punct local overlay.
-4. **Snap la element AX:** la punctul obținut interogăm `AXUIElementCopyElementAtPosition`; dacă găsim
-   un buton/câmp/meniu, folosim centrul și bounds-urile lui reale (și desenăm highlight pe ele).
-   Dacă aplicația nu expune AX, rămânem la coordonata din viziune.
-5. Cursorul Macky zboară pe o curbă Bézier, stă lângă țintă, apoi dispare. Dacă fereastra s-a mutat
-   sau a trecut prea mult timp, **ascundem** indicația în loc să o desenăm aproximativ.
+1. Capturăm monitorul (sau monitoarele), redimensionăm și **păstrăm metadatele**: `display_id`,
+   originea globală, bounds, scale factor (Retina), dimensiunea trimisă modelului.
+2. Modelul răspunde cu text vorbit + tool call `point_at({screen, x, y, label})`.
+   **Fallback** pentru modelele fără tool calling: un tag `[[point:screen,x,y,label]]` la finalul textului,
+   eliminat înainte de a fi citit cu voce.
+3. **Adaptor de coordonate per familie de model**: unele răspund în pixeli ai imaginii, altele
+   (ex. Gemini) în coordonate normalizate 0–1000. Adaptorul normalizează totul în pixeli ai imaginii.
+4. Transformare: pixel imagine → anulare redimensionare → punct în captură → punct global macOS → punct local overlay.
+5. **Snap la element AX:** `AXUIElementCopyElementAtPosition` la punctul obținut. Dacă găsim buton/câmp/meniu,
+   folosim bounds-urile lui reale și desenăm highlight. Dacă nu, rămânem la coordonata din viziune.
+6. Cursorul Macky zboară pe o curbă Bézier, stă lângă țintă, apoi dispare. Dacă fereastra s-a mutat,
+   indicația se **ascunde**, nu se desenează aproximativ.
+7. **Ecran de calibrare** în Setări: o grilă cu ținte numerotate. Întrebi „arată-mi ținta 7” și vezi
+   imediat cât de precis e modelul ales.
 
-### 2.5 Siguranță (din blueprint, nivelurile 0–1)
-MVP-ul doar **observă și indică** — nu dă click, nu tastează în locul utilizatorului (cu excepția dictării cerute explicit).
-- Permisiuni cerute contextual, cu explicație: Microfon, Screen Recording, Accessibility.
-- Captură **doar la apăsarea hotkey-ului**, niciodată continuu; indicator vizibil când se capturează.
-- Nu stocăm audio brut sau screenshot-uri; transcriptul sesiunii stă în memorie.
+### 2.5 Semnare fără cont Apple Developer plătit
+- Build din Xcode cu **Apple ID gratuit (Personal Team)** sau „Sign to Run Locally”. Pentru uz pe propriul Mac,
+  nu e nevoie de notarizare.
+- Problemă cunoscută: permisiunile macOS (Screen Recording, Accessibility) sunt legate de semnătură, iar
+  semnătura ad-hoc se schimbă la fiecare build, deci ți le-ar cere din nou.
+  **Soluție:** un certificat self-signed de tip „Code Signing” creat o singură dată în Keychain Access și
+  folosit constant, plus un bundle ID fix. Scriptul și pașii intră în `docs/SETUP.md`.
+
+### 2.6 Siguranță și confidențialitate
+MVP-ul doar **observă și indică**: nu dă click și nu tastează în locul tău (excepție: dictarea, cerută explicit).
+- Captură **doar la apăsarea hotkey-ului**, niciodată continuu, cu indicator vizibil.
+- Audio și transcriere rămân **local**. Pe internet pleacă doar textul întrebării + screenshot-ul, spre OpenRouter.
+- Opțiune în Setări: aplicații excluse de la captură (ex. manager de parole, aplicația băncii).
+  ScreenCaptureKit permite excluderea ferestrelor lor din imagine.
 - Textul de pe ecran e tratat ca date, nu ca instrucțiuni (regulă în system prompt).
 
 ---
@@ -93,97 +115,94 @@ MVP-ul doar **observă și indică** — nu dă click, nu tastează în locul ut
 
 ```
 macky/
-├── mac-app/                 # proiect Xcode (SwiftUI + AppKit)
-│   └── Macky/
-│       ├── App/             # MackyApp, AppDelegate, MenuBarController
-│       ├── Core/            # SessionManager (state machine), ConversationStore
-│       ├── Voice/           # AudioCapture, STTProvider(+AssemblyAI, AppleSpeech), TTSProvider(+ElevenLabs, System)
-│       ├── Screen/          # ScreenCaptureService, ScreenGeometry, AccessibilityInspector
-│       ├── Overlay/         # OverlayPanel, CompanionCursorView, ResponseBubble, HighlightView
-│       ├── Input/           # GlobalHotkeyMonitor (CGEvent tap), DictationTyper
-│       ├── AI/              # MackyAPIClient (SSE), ToolCallParser
-│       ├── Permissions/     # PermissionsManager + onboarding
-│       └── UI/              # PanelView, Settings, DesignSystem
-│   └── MackyTests/          # geometrie Retina/multi-monitor, parser, state machine
-├── backend/                 # Cloudflare Worker (TypeScript, Hono)
-│   ├── src/routes/          # chat, tts, stt-token, auth
-│   ├── src/prompts/         # system prompt + definiția tool-ului point_at
-│   └── test/
-├── shared/contracts/        # schema JSON pentru tool calls și evenimente SSE
-└── docs/
+├── Macky.xcodeproj
+├── Macky/
+│   ├── App/             # MackyApp, AppDelegate, MenuBarController
+│   ├── Core/            # SessionManager (state machine), ConversationStore, CostTracker
+│   ├── AI/              # LLMProvider, OpenRouterProvider, AnthropicProvider, SSEParser,
+│   │                    # PointingInstructionParser, CoordinateAdapters, SystemPrompt
+│   ├── Voice/           # AudioRecorder, SpeechToText(+WhisperKit, AppleSpeech), SpeechOutput
+│   ├── Screen/          # ScreenCaptureService, ScreenGeometry, AccessibilityInspector
+│   ├── Overlay/         # OverlayPanel, CompanionCursorView, ResponseBubble, HighlightView
+│   ├── Input/           # GlobalHotkeyMonitor (CGEvent tap), DictationTyper
+│   ├── Settings/        # SettingsView, KeychainStore, ModelPicker, CalibrationView
+│   └── Permissions/     # PermissionsManager + onboarding
+├── MackyTests/          # geometrie Retina/multi-monitor, parsere, adaptoare coordonate, state machine
+└── docs/                # MVP-PLAN.md, SETUP.md
 ```
+
+Dependențe externe (Swift Package Manager, toate gratuite): **WhisperKit**. Restul e framework Apple.
 
 ---
 
 ## 4. Etapele de construcție
 
-Estimările sunt pentru un developer iOS/macOS cu experiență, orientative.
+Estimări orientative pentru un developer cu experiență macOS.
 
-### Etapa 0 — Schelet (2–3 zile)
-- Proiect Xcode menu bar-only, icon în status bar, panou flotant non-activating.
-- Worker Cloudflare cu `/v1/chat` funcțional (text simplu), secrete configurate.
-- **Criteriu:** aplicația pornește/se închide, trimite o întrebare text și primește răspuns în stream, fără nicio cheie API în binar.
+### Etapa 0: Schelet (2 zile)
+- Proiect Xcode menu bar-only, panou flotant non-activating, ecran de Setări cu cheia OpenRouter în Keychain.
+- `OpenRouterProvider` cu streaming text; alegere model din listă.
+- Semnare cu certificat self-signed stabil + `docs/SETUP.md`.
+- **Criteriu:** scrii o întrebare în panou și primești răspunsul în stream; permisiunile rămân acordate între build-uri.
 
-### Etapa 1 — Voce (≈1 săptămână)
-- Hotkey global `Control + Option` (CGEvent tap), configurabil ulterior.
-- Captură microfon, STT streaming cu token efemer, waveform live.
-- TTS pe propoziții, redare, buton Stop / apăsare nouă = întrerupe răspunsul curent.
-- State machine: `idle → listening → thinking → speaking → idle` (+ `error`, `offline`).
-- **Criteriu:** vorbești, auzi răspunsul în < 2 s, poți întrerupe fără răspuns dublat.
+### Etapa 1: Voce (≈1 săptămână)
+- Hotkey global `Control + Option` (CGEvent tap).
+- Înregistrare microfon, transcriere WhisperKit, waveform live.
+- Voce locală pe propoziții; o apăsare nouă sau butonul Stop întrerupe răspunsul curent.
+- State machine: `idle → listening → transcribing → thinking → speaking → idle` (+ `error`).
+- **Criteriu:** vorbești în română, auzi răspunsul în < 2–3 s, poți întrerupe fără răspuns dublat.
 
-### Etapa 2 — Ecranul (≈1 săptămână)
-- ScreenCaptureKit pe toate monitoarele la fiecare turn; imaginea monitorului cu cursorul primește prioritate.
-- `ScreenGeometry` cu toate transformările de coordonate + **teste unitare** (Retina 2x, monitor secundar
-  la stânga/deasupra, scale diferit pe monitoare).
+### Etapa 2: Ecranul (≈1 săptămână)
+- ScreenCaptureKit la fiecare turn (monitorul cu cursorul; opțional toate), aplicații excluse.
+- `ScreenGeometry` cu toate transformările + **teste unitare** (Retina 2x, monitor secundar la stânga/deasupra,
+  scale diferit pe monitoare).
 - `AccessibilityInspector`: aplicația activă, fereastra activă, element la poziție.
-- **Criteriu:** întrebi „ce e pe ecran?” în Chrome/Figma și răspunsul descrie corect ce vezi.
+- Costul per răspuns afișat în panou.
+- **Criteriu:** „ce e pe ecran?” în Chrome/Figma primește o descriere corectă.
 
-### Etapa 3 — Overlay și pointing (≈1,5 săptămâni) ⭐
-- Panou transparent full-screen pe fiecare monitor, click-through, pe toate Spaces, nu fură focusul.
-- Cursorul Macky (identitate vizuală proprie), bulă de răspuns, animație Bézier, highlight pe bounds AX.
-- Tool `point_at` în backend + parser în app; suport pentru mai mulți pași („apasă aici, apoi aici”).
-- Invalidare indicație la mutarea ferestrei / schimbarea monitorului / timeout.
-- **Criteriu:** „unde export video în DaVinci/Figma?” → cursorul ajunge pe butonul corect, pe Retina și pe monitorul secundar.
+### Etapa 3: Overlay și pointing (≈1,5 săptămâni) ⭐
+- Panou transparent pe fiecare monitor, click-through, pe toate Spaces, nu fură focusul.
+- Cursorul Macky, bulă de răspuns, animație Bézier, highlight pe bounds AX.
+- Tool `point_at` + fallback cu tag + adaptoare de coordonate + suport pentru mai mulți pași.
+- Ecranul de calibrare; comparăm 3–4 modele de pe OpenRouter pe precizie, viteză și cost.
+- **Criteriu:** „unde export video?” în DaVinci/Figma: cursorul ajunge pe butonul corect,
+  pe Retina și pe monitorul secundar.
 
-### Etapa 4 — Dictare + polish (≈1 săptămână)
-- Mod dictare (alt hotkey): transcriptul se inserează în câmpul activ (pasteboard + `Cmd+V` simulat, cu restaurarea clipboard-ului).
-- Onboarding permisiuni pas cu pas, ecran de setări (hotkey, voce, model, pornire la login).
-- Stări de eroare clare: fără internet, permisiune refuzată, cotă epuizată.
+### Etapa 4: Dictare și finisaje (≈3–4 zile)
+- Mod dictare (alt hotkey): transcriptul WhisperKit se inserează în câmpul activ
+  (pasteboard + `Cmd+V` simulat, cu restaurarea clipboard-ului). Fără AI, deci cost zero.
+- Onboarding permisiuni, pornire la login, alegere voce și hotkey.
 
-### Etapa 5 — Lansare beta (≈1 săptămână)
-- Cote Free în backend (identitate dispozitiv), analytics minimale și anonime (PostHog, fără conținut).
-- Semnare Developer ID, **notarizare Apple**, DMG, auto-update cu Sparkle.
-- Landing page simplă + formular de feedback.
+**Total MVP: aprox. 4–5 săptămâni** pentru un developer. Etapele 0–3 dau deja versiunea utilizabilă zilnic.
 
-**Total MVP: aprox. 6–7 săptămâni** pentru un developer. Un demo intern (etapele 0–3) e posibil în ~4 săptămâni.
+Am scos din planul inițial: backend-ul Cloudflare, conturile, cotele, analytics, notarizarea,
+auto-update-ul și billing-ul. Nu au sens pentru uz personal.
 
 ---
 
 ## 5. După MVP (v2+)
-1. **Mod Agent**: joburi în fundal (cercetare, documente) cu coadă, progres, anulare, card de rezultat.
-2. **Acțiuni pe ecran cu aprobare** (nivelul 2–3 din blueprint): click/tastare prin AX, confirmare înainte de fiecare pas, re-observare după acțiune.
-3. **Integrări** OAuth (Calendar, Notes, Gmail, Drive) cu scope minim; read / draft / send separate.
-4. **Memorie** persistentă, editabilă și ștergibilă; istoric conversații.
-5. **Billing** (Stripe) cu planuri Free / Pro / Max, cont de utilizator.
-6. Opțional: voce realtime (speech-to-speech) pentru conversații libere, fără push-to-talk.
+1. **Mod Agent**: sarcini în fundal (cercetare, documente) cu progres și anulare.
+2. **Acțiuni cu aprobare**: click/tastare prin AX, confirmare înainte de fiecare pas, verificare după.
+3. **Integrări locale gratuite**: Calendar și Reminders prin EventKit, Notes prin AppleScript.
+4. **Memorie** persistentă locală (SQLite), editabilă și ștergibilă.
+5. Voci locale mai naturale (Piper), rutare automată între modelul rapid și cel puternic după tipul întrebării.
 
 ---
 
 ## 6. Riscuri principale
 | Risc | Atenuare |
 |---|---|
-| Precizia pointing-ului în aplicații fără AX (DaVinci, jocuri, canvas) | Snap AX unde se poate; crop + a doua trecere de viziune pe zona țintă; nu arătăm dacă încrederea e mică |
-| Latență mare (3 servicii în lanț) | Streaming peste tot, TTS pe propoziții, conexiuni pre-încălzite, model rapid implicit |
-| Cost per întrebare (imagine + TTS) | Screenshot redimensionat, cote, cache pentru system prompt |
-| Permisiunile macOS (TCC) resetate la fiecare build nesemnat | Semnare consecventă de la început, un singur bundle ID |
-| Confidențialitate | Captură doar la cerere, nimic stocat pe server, politică clară în onboarding |
+| Precizia pointing-ului variază mult între modele | Calibrare + comparație în Etapa 3; snap AX; nu arătăm dacă încrederea e mică |
+| Consumul de credite OpenRouter | Imagine redimensionată, un singur monitor implicit, istoric scurtat, cost afișat per răspuns |
+| Modele fără tool calling / cu alte convenții de coordonate | Fallback cu tag în text + adaptoare de coordonate testate |
+| Vocea `AVSpeechSynthesizer` sună mai robotic decât ElevenLabs | Voci Premium gratuite din macOS; Piper local în v2 |
+| Latența transcrierii locale pe Mac-uri mai vechi | Model Whisper mai mic; rezervă Apple Speech |
+| Permisiunile resetate la fiecare build | Certificat self-signed stabil (secțiunea 2.5) |
 
 ---
 
-## 7. Ce e nevoie de la tine înainte de cod
-- Un **Mac** cu macOS 14.2+ și Xcode 16+ (aplicația nu se poate compila/testa în afara macOS).
-- Cont **Apple Developer** ($99/an) pentru semnare și notarizare.
-- Chei API: Anthropic, AssemblyAI, ElevenLabs; cont Cloudflare (gratuit e suficient la început).
-- Decizie: pornim de la zero sau pornim de la codul open-source Clicky (MIT, permite reutilizarea cu păstrarea
-  notei de copyright) și îl rescriem progresiv? Recomandarea mea: **de la zero, cu Clicky ca referință**:
-  arhitectura de mai sus e mai curată (tool calls structurate, snap AX, geometrie testată), iar brandingul trebuie oricum să fie complet al nostru.
+## 7. Ce e nevoie înainte de cod
+- Un **Mac** cu macOS 14.2+ (ideal Apple Silicon) și **Xcode** (gratuit din App Store).
+- Un **Apple ID** oarecare (fără cont Developer plătit).
+- **Cheia API OpenRouter** (se introduce în aplicație, nu în repo).
+- Opțional: vocea „Ioana (Enhanced)” descărcată din System Settings → Accessibility → Spoken Content.

@@ -60,4 +60,17 @@ public enum CoordinateConvention: String, CaseIterable, Codable, Sendable {
             y: min(max(pixelY, 0), Double(imagePixelSize.height))
         )
     }
+
+    /// The inverse: expresses a screenshot pixel in this convention (used to describe the user's drawings).
+    public func modelPoint(fromImagePixel imagePixel: CGPoint, imagePixelSize: CGSize) -> CGPoint {
+        switch self {
+        case .imagePixels:
+            return imagePixel
+        case .normalizedTo1000:
+            return CGPoint(
+                x: Double(imagePixel.x) / Double(imagePixelSize.width) * 1000,
+                y: Double(imagePixel.y) / Double(imagePixelSize.height) * 1000
+            )
+        }
+    }
 }

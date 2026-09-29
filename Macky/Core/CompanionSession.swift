@@ -26,6 +26,9 @@ final class CompanionSession: ObservableObject {
     private let accessibilityInspector = AccessibilityInspector()
     private let openRouterClient: OpenRouterClient
     private let dictationTextInserter = DictationTextInserter()
+    private let drawingOverlayController: DrawingOverlayController
+    private let actionConfirmationController = ActionConfirmationController()
+    private let screenActionExecutor: ScreenActionExecutor
 
     private var transcriber: SpeechTranscriber?
     private var transcriberConfigurationKey = ""
@@ -43,14 +46,19 @@ final class CompanionSession: ObservableObject {
 
     private static let minimumRecordingDurationInSeconds = 0.3
     private static let maximumPointingSteps = 5
+    /// Upper bound on model round trips for one question when Macky acts on the computer.
+    private static let maximumAgentSteps = 8
 
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
-         overlayController: CompanionOverlayController, openRouterClient: OpenRouterClient) {
+         overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
+         openRouterClient: OpenRouterClient) {
         self.settings = settings
         self.apiKeyStore = apiKeyStore
         self.modelCatalogStore = modelCatalogStore
         self.overlayController = overlayController
+        self.drawingOverlayController = drawingOverlayController
         self.openRouterClient = openRouterClient
+        self.screenActionExecutor = ScreenActionExecutor(textInserter: dictationTextInserter)
 
         audioRecorder.onAudioLevel = { [weak overlayController] audioLevel in
             overlayController?.setAudioLevel(audioLevel)
@@ -99,6 +107,8 @@ final class CompanionSession: ObservableObject {
         activeRecordingPurpose = nil
         speechSpeaker.stopSpeaking()
         stopWatchingPointing()
+        actionConfirmationController.cancelPendingConfirmation()
+        drawingOverlayController.clear()
         overlayController.hideImmediately()
         state = .idle
     }
@@ -164,6 +174,10 @@ final class CompanionSession: ObservableObject {
         activeRecordingPurpose = purpose
         state = .listening
         overlayController.beginInteraction(activity: purpose == .dictate ? .dictating : .listening)
+        if purpose == .talk && settings.drawingEnabled {
+            // While the keys are held, the mouse draws instead of clicking.
+            drawingOverlayController.beginDrawingSession()
+        }
     }
 
     private func finishListening() {
@@ -171,9 +185,12 @@ final class CompanionSession: ObservableObject {
         activeRecordingPurpose = nil
         let recordedAudio = audioRecorder.stopRecording()
         let interactionIdentifier = currentInteractionIdentifier
+        drawingOverlayController.endDrawingSession()
+        let userDrawingStrokes = drawingOverlayController.meaningfulStrokes
 
         guard recordedAudio.durationInSeconds >= Self.minimumRecordingDurationInSeconds else {
             state = .idle
+            drawingOverlayController.clear()
             overlayController.hideImmediately()
             return
         }
@@ -186,11 +203,12 @@ final class CompanionSession: ObservableObject {
             case .talk:
                 // The screen is captured right at release, while the user still looks at what they asked about.
                 let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
-                async let capturedScreensTask = captureScreensForQuestion()
+                async let capturedScreensTask = captureScreensForQuestion(userDrawingStrokes: userDrawingStrokes)
                 let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier)
                 let capturedScreens = await capturedScreensTask
                 guard isCurrent(interactionIdentifier), let transcript else { return }
-                await answer(question: transcript, capturedScreens: capturedScreens, frontmostApplication: frontmostApplication, interactionIdentifier: interactionIdentifier)
+                await answer(question: transcript, capturedScreens: capturedScreens, frontmostApplication: frontmostApplication,
+                             userDrawingStrokes: userDrawingStrokes, interactionIdentifier: interactionIdentifier)
             case .dictate:
                 guard let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier),
                       isCurrent(interactionIdentifier) else { return }
@@ -205,6 +223,7 @@ final class CompanionSession: ObservableObject {
     private func cancelListening() {
         activeRecordingPurpose = nil
         _ = audioRecorder.stopRecording()
+        drawingOverlayController.clear()
         state = .idle
         overlayController.hideImmediately()
     }
@@ -238,12 +257,13 @@ final class CompanionSession: ObservableObject {
 
     // MARK: Answering
 
-    private func captureScreensForQuestion() async -> [CapturedScreen] {
+    private func captureScreensForQuestion(userDrawingStrokes: [[CGPoint]] = []) async -> [CapturedScreen] {
         do {
             return try await screenCaptureService.captureScreens(
                 includeAllScreens: settings.captureAllScreens,
                 maximumLongEdge: settings.maximumScreenshotLongEdge,
-                excludedBundleIdentifiers: Set(settings.excludedApplicationBundleIdentifiers)
+                excludedBundleIdentifiers: Set(settings.excludedApplicationBundleIdentifiers),
+                userDrawingStrokes: userDrawingStrokes
             )
         } catch {
             // Without a screenshot Macky can still answer general questions.
@@ -251,7 +271,8 @@ final class CompanionSession: ObservableObject {
         }
     }
 
-    private func answer(question: String, capturedScreens: [CapturedScreen], frontmostApplication: FrontmostApplicationSnapshot, interactionIdentifier: UUID) async {
+    private func answer(question: String, capturedScreens: [CapturedScreen], frontmostApplication: FrontmostApplicationSnapshot,
+                        userDrawingStrokes: [[CGPoint]] = [], interactionIdentifier: UUID) async {
         guard let apiKey = apiKeyStore.apiKey(), !apiKey.isEmpty else {
             fail(with: "Adaugă cheia OpenRouter în Setări.")
             return
@@ -275,10 +296,11 @@ final class CompanionSession: ObservableObject {
         // Second attempt only happens when the model rejects tool calling before answering anything.
         for attemptNumber in 1...2 {
             do {
-                try await streamAnswer(
+                try await runConversationTurn(
                     question: question,
                     capturedScreens: capturedScreens,
                     frontmostApplication: frontmostApplication,
+                    userDrawingStrokes: userDrawingStrokes,
                     modelIdentifier: modelIdentifier,
                     apiKey: apiKey,
                     coordinateConvention: coordinateConvention,
@@ -297,43 +319,197 @@ final class CompanionSession: ObservableObject {
         }
     }
 
-    private func streamAnswer(
+    /// One user question, which may take several model steps when Macky acts on the computer:
+    /// the model answers (and may point or ask for actions) → Macky performs the actions →
+    /// takes a fresh screenshot → the model checks the result and continues, until it stops acting.
+    private func runConversationTurn(
         question: String,
         capturedScreens: [CapturedScreen],
         frontmostApplication: FrontmostApplicationSnapshot,
+        userDrawingStrokes: [[CGPoint]],
         modelIdentifier: String,
         apiKey: String,
         coordinateConvention: CoordinateConvention,
         useToolCalling: Bool,
         interactionIdentifier: UUID
     ) async throws {
-        let systemPrompt = MackyPrompt.systemPrompt(language: settings.responseLanguage, pointingMode: useToolCalling ? .toolCall : .textTag)
+        let actionsEnabled = useToolCalling && settings.actionMode != .disabled
+        var tools: [MackyTool] = useToolCalling ? [.pointAt] : []
+        if actionsEnabled { tools += MackyTool.actionTools }
+
+        let systemPrompt = MackyPrompt.systemPrompt(
+            language: settings.responseLanguage,
+            pointingMode: useToolCalling ? .toolCall : .textTag,
+            actionsEnabled: actionsEnabled
+        )
         let userText = MackyPrompt.userMessageText(
             question: question,
             screenshots: capturedScreens.map(\.promptDescription),
             frontmostApplication: frontmostApplication.context,
-            coordinateConvention: coordinateConvention
+            coordinateConvention: coordinateConvention,
+            userMarkings: Self.markings(from: userDrawingStrokes, on: capturedScreens, coordinateConvention: coordinateConvention)
         )
         let userParts: [ChatContentPart] = [.text(userText)] + capturedScreens.map { .jpegImage(base64EncodedData: $0.jpegData.base64EncodedString()) }
         conversationHistory.maximumRememberedExchanges = max(0, settings.rememberedExchangeCount)
-        let messages = conversationHistory.messagesForRequest(systemPrompt: systemPrompt, currentUserParts: userParts)
+        var messages = conversationHistory.messagesForRequest(systemPrompt: systemPrompt, currentUserParts: userParts)
+
+        var currentScreens = capturedScreens
+        var spokenAnswerParts: [String] = []
+        var pointedLabels: [String] = []
+        var performedActionDescriptions: [String] = []
+        isAnswerStreamComplete = false
+
+        agentLoop: for stepNumber in 1...Self.maximumAgentSteps {
+            let stepResult = try await streamModelStep(
+                messages: messages,
+                tools: tools,
+                modelIdentifier: modelIdentifier,
+                apiKey: apiKey,
+                coordinateConvention: coordinateConvention,
+                interactionIdentifier: interactionIdentifier
+            )
+            guard isCurrent(interactionIdentifier) else { return }
+            if !stepResult.visibleText.isEmpty { spokenAnswerParts.append(stepResult.visibleText) }
+            pointedLabels += stepResult.pointingInstructions.map(\.label).filter { !$0.isEmpty }
+
+            let requestedActions = stepResult.toolCalls.compactMap { ScreenAction(toolCall: $0) }
+            guard actionsEnabled, !requestedActions.isEmpty else {
+                // A normal answer: show what the model pointed at and finish.
+                if !stepResult.pointingInstructions.isEmpty {
+                    await point(
+                        at: stepResult.pointingInstructions,
+                        capturedScreens: currentScreens,
+                        coordinateConvention: coordinateConvention,
+                        frontmostApplication: stepNumber == 1 ? frontmostApplication : accessibilityInspector.frontmostApplicationSnapshot(),
+                        interactionIdentifier: interactionIdentifier
+                    )
+                }
+                break agentLoop
+            }
+
+            // Every tool call needs a result in the next request, in the same order.
+            messages.append(ChatMessage(
+                role: .assistant,
+                parts: stepResult.visibleText.isEmpty ? [] : [.text(stepResult.visibleText)],
+                toolCalls: stepResult.toolCalls
+            ))
+            var userDeclined = false
+            for toolCall in stepResult.toolCalls {
+                let resultText: String
+                if userDeclined {
+                    resultText = "Skipped because the user declined an earlier action."
+                } else if let action = ScreenAction(toolCall: toolCall) {
+                    switch await perform(action, on: currentScreens, coordinateConvention: coordinateConvention, stepNumber: stepNumber, interactionIdentifier: interactionIdentifier) {
+                    case .done(let description):
+                        performedActionDescriptions.append(description)
+                        resultText = "Done."
+                    case .declined:
+                        userDeclined = true
+                        resultText = "The user declined this action."
+                    case .failed(let reason):
+                        resultText = "Failed: \(reason)"
+                    }
+                } else if toolCall.name == MackyTool.pointAt.rawValue {
+                    resultText = "Shown to the user."
+                } else {
+                    resultText = "Invalid tool call arguments."
+                }
+                guard isCurrent(interactionIdentifier) else { return }
+                messages.append(.toolResult(for: toolCall, result: resultText))
+            }
+
+            if userDeclined {
+                let declinedAnswer = "Bine, nu fac asta."
+                spokenAnswerParts.append(declinedAnswer)
+                showAndSpeak(declinedAnswer)
+                break agentLoop
+            }
+            if stepNumber == Self.maximumAgentSteps {
+                let limitAnswer = "Am făcut \(performedActionDescriptions.count) pași și mă opresc aici. Spune-mi dacă să continui."
+                spokenAnswerParts.append(limitAnswer)
+                showAndSpeak(limitAnswer)
+                break agentLoop
+            }
+
+            // Let the app react, then look again so the model can verify the step.
+            state = .thinking
+            overlayController.setActivity(.thinking)
+            try await Task.sleep(nanoseconds: 900_000_000)
+            guard isCurrent(interactionIdentifier) else { return }
+            currentScreens = await captureScreensForQuestion()
+            let observationText = MackyPrompt.afterActionsMessageText(
+                screenshots: currentScreens.map(\.promptDescription),
+                coordinateConvention: coordinateConvention
+            )
+            messages.append(ChatMessage(
+                role: .user,
+                parts: [.text(observationText)] + currentScreens.map { .jpegImage(base64EncodedData: $0.jpegData.base64EncodedString()) }
+            ))
+            messages = Self.keepingOnlyNewestScreenshots(in: messages)
+        }
+
+        var finalAnswer = SpeechTextCleaner.cleanForSpeech(spokenAnswerParts.joined(separator: " "))
+        if finalAnswer.isEmpty {
+            if let firstLabel = pointedLabels.first {
+                finalAnswer = "Uite aici: \(firstLabel)."
+                speak(finalAnswer)
+            } else if !performedActionDescriptions.isEmpty {
+                finalAnswer = "Gata."
+                speak(finalAnswer)
+            } else {
+                finalAnswer = "Modelul nu a trimis niciun răspuns. Încearcă din nou sau alege alt model."
+            }
+            lastAnswerText = finalAnswer
+            overlayController.setBubbleText(finalAnswer)
+        }
+
+        var rememberedAnswer = finalAnswer
+        if !pointedLabels.isEmpty { rememberedAnswer += " (Am arătat pe ecran: \(pointedLabels.joined(separator: ", ")).)" }
+        if !performedActionDescriptions.isEmpty { rememberedAnswer += " (Am făcut: \(performedActionDescriptions.joined(separator: "; ")).)" }
+        conversationHistory.record(userText: question, assistantText: rememberedAnswer)
+        isAnswerStreamComplete = true
+
+        guard isCurrent(interactionIdentifier) else { return }
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
+        }
+    }
+
+    private struct ModelStepResult {
+        var visibleText: String
+        var pointingInstructions: [PointingInstruction]
+        var toolCalls: [ChatToolCall]
+    }
+
+    /// Streams one model response: shows and speaks text as it arrives, collects tool calls.
+    private func streamModelStep(
+        messages: [ChatMessage],
+        tools: [MackyTool],
+        modelIdentifier: String,
+        apiKey: String,
+        coordinateConvention: CoordinateConvention,
+        interactionIdentifier: UUID
+    ) async throws -> ModelStepResult {
         let requestBody = try OpenRouterRequestBuilder.makeChatCompletionBody(
             modelIdentifier: modelIdentifier,
             messages: messages,
-            includePointingTool: useToolCalling,
+            tools: tools,
             coordinateConvention: coordinateConvention
         )
 
         var pointTagFilter = PointTagStreamFilter()
         var sentenceSegmenter = SentenceSegmenter()
-        var visibleAnswer = ""
+        var stepText = ""
         var pointingInstructions: [PointingInstruction] = []
-        isAnswerStreamComplete = false
+        var toolCalls: [ChatToolCall] = []
+        // Text from earlier steps of the same question stays in the bubble.
+        let earlierAnswerText = lastAnswerText
 
         func handleVisibleText(_ visibleText: String) {
             guard !visibleText.isEmpty else { return }
-            visibleAnswer += visibleText
-            let displayText = SpeechTextCleaner.cleanForSpeech(visibleAnswer)
+            stepText += visibleText
+            let stepDisplayText = SpeechTextCleaner.cleanForSpeech(stepText)
+            let displayText = earlierAnswerText.isEmpty ? stepDisplayText : earlierAnswerText + " " + stepDisplayText
             lastAnswerText = displayText
             overlayController.setBubbleText(displayText)
             if state != .speaking {
@@ -346,14 +522,15 @@ final class CompanionSession: ObservableObject {
         }
 
         for try await streamEvent in openRouterClient.streamChatCompletion(requestBody: requestBody, apiKey: apiKey) {
-            guard isCurrent(interactionIdentifier) else { return }
+            guard isCurrent(interactionIdentifier) else { break }
             switch streamEvent {
             case .textDelta(let textDelta):
                 let filteredOutput = pointTagFilter.consume(textDelta)
                 pointingInstructions += filteredOutput.pointingInstructions
                 handleVisibleText(filteredOutput.visibleText)
-            case .toolCall(let name, let argumentsJSON):
-                if name == OpenRouterRequestBuilder.pointAtToolName, let instruction = PointingInstruction(toolArgumentsJSON: argumentsJSON) {
+            case .toolCall(let toolCall):
+                toolCalls.append(toolCall)
+                if toolCall.name == MackyTool.pointAt.rawValue, let instruction = PointingInstruction(toolArgumentsJSON: toolCall.argumentsJSON) {
                     pointingInstructions.append(instruction)
                 }
             case .usage(let usage):
@@ -362,42 +539,131 @@ final class CompanionSession: ObservableObject {
                 break
             }
         }
-        guard isCurrent(interactionIdentifier) else { return }
 
-        handleVisibleText(pointTagFilter.flush())
-        if let lastSentence = sentenceSegmenter.flush() {
-            speak(lastSentence)
-        }
-
-        var finalAnswer = SpeechTextCleaner.cleanForSpeech(visibleAnswer)
-        if finalAnswer.isEmpty {
-            if let firstInstruction = pointingInstructions.first {
-                finalAnswer = firstInstruction.label.isEmpty ? "Uite aici." : "Uite aici: \(firstInstruction.label)."
-                speak(finalAnswer)
-            } else {
-                finalAnswer = "Modelul nu a trimis niciun răspuns. Încearcă din nou sau alege alt model."
+        if isCurrent(interactionIdentifier) {
+            handleVisibleText(pointTagFilter.flush())
+            if let lastSentence = sentenceSegmenter.flush() {
+                speak(lastSentence)
             }
-            lastAnswerText = finalAnswer
-            overlayController.setBubbleText(finalAnswer)
+        }
+        return ModelStepResult(visibleText: SpeechTextCleaner.cleanForSpeech(stepText), pointingInstructions: pointingInstructions, toolCalls: toolCalls)
+    }
+
+    private func showAndSpeak(_ text: String) {
+        lastAnswerText = lastAnswerText.isEmpty ? text : lastAnswerText + " " + text
+        overlayController.setBubbleText(lastAnswerText)
+        state = .speaking
+        overlayController.setActivity(.speaking)
+        speak(text)
+    }
+
+    // MARK: Acting
+
+    private enum ActionOutcome {
+        case done(String)
+        case declined
+        case failed(String)
+    }
+
+    private func perform(_ action: ScreenAction, on screens: [CapturedScreen], coordinateConvention: CoordinateConvention,
+                         stepNumber: Int, interactionIdentifier: UUID) async -> ActionOutcome {
+        guard accessibilityInspector.isTrusted else {
+            return .failed("Macky does not have the Accessibility permission, so it cannot click or type.")
         }
 
-        let pointedLabels = pointingInstructions.map(\.label).filter { !$0.isEmpty }
-        let rememberedAnswer = pointedLabels.isEmpty ? finalAnswer : finalAnswer + " (Am arătat pe ecran: \(pointedLabels.joined(separator: ", ")).)"
-        conversationHistory.record(userText: question, assistantText: rememberedAnswer)
-        isAnswerStreamComplete = true
+        var clickTarget: CGPoint?
+        if case .click(let target, _) = action {
+            guard let resolvedTarget = resolveTarget(of: target, on: screens, coordinateConvention: coordinateConvention) else {
+                return .failed("That position is not on any captured screen.")
+            }
+            clickTarget = resolvedTarget.point
+            // Show where the click will land before it happens.
+            await overlayController.flyCursor(to: resolvedTarget.point, highlightRect: resolvedTarget.highlightRect, label: target.label)
+            guard isCurrent(interactionIdentifier) else { return .declined }
+        }
 
-        if !pointingInstructions.isEmpty {
-            await point(
-                at: pointingInstructions,
-                capturedScreens: capturedScreens,
-                coordinateConvention: coordinateConvention,
-                frontmostApplication: frontmostApplication,
-                interactionIdentifier: interactionIdentifier
+        if settings.actionMode == .askFirst {
+            let isApproved = await actionConfirmationController.requestConfirmation(
+                actionDescription: action.userFacingDescription,
+                stepNumber: stepNumber,
+                nearPoint: clickTarget
+            )
+            guard isCurrent(interactionIdentifier), isApproved else {
+                overlayController.clearPointing()
+                return .declined
+            }
+        }
+
+        overlayController.clearPointing()
+        switch action {
+        case .click(_, let kind):
+            if let clickTarget {
+                await screenActionExecutor.click(atAppKitGlobalPoint: clickTarget, kind: kind)
+            }
+        case .typeText(let text, let pressEnterAfterwards):
+            await screenActionExecutor.type(text, pressEnterAfterwards: pressEnterAfterwards)
+        case .pressKeys(let combination):
+            screenActionExecutor.press(combination)
+        }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        return .done(action.userFacingDescription)
+    }
+
+    /// Converts a model coordinate to a real screen point, snapping to the control underneath
+    /// when Accessibility can see one.
+    private func resolveTarget(of instruction: PointingInstruction, on screens: [CapturedScreen],
+                               coordinateConvention: CoordinateConvention) -> (point: CGPoint, highlightRect: CGRect?)? {
+        guard let screen = screens.first(where: { $0.geometry.screenNumber == instruction.screenNumber }) ?? screens.first else { return nil }
+        let primaryScreenHeight = NSScreen.primaryScreenHeight
+        let imagePixel = coordinateConvention.imagePixelPoint(modelX: instruction.x, modelY: instruction.y, imagePixelSize: screen.geometry.imagePixelSize)
+        let targetPoint = ScreenGeometry.appKitGlobalPoint(fromImagePixel: imagePixel, on: screen.geometry)
+
+        let quartzPoint = ScreenGeometry.quartzGlobalPoint(fromAppKitGlobalPoint: targetPoint, primaryScreenHeight: primaryScreenHeight)
+        if let element = accessibilityInspector.interactiveElement(atQuartzGlobalPoint: quartzPoint),
+           element.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            let elementRect = ScreenGeometry.appKitGlobalRect(fromQuartzGlobalRect: element.frameInQuartzGlobalCoordinates, primaryScreenHeight: primaryScreenHeight)
+            let elementCenter = CGPoint(x: elementRect.midX, y: elementRect.midY)
+            if AccessibilitySnapPolicy.shouldSnap(
+                role: element.role,
+                elementFrame: elementRect,
+                screenFrame: screen.geometry.frameInAppKitGlobalCoordinates,
+                distanceFromTargetPoint: ScreenGeometry.distance(from: targetPoint, to: elementCenter)
+            ) {
+                return (elementCenter, elementRect)
+            }
+        }
+        return (targetPoint, nil)
+    }
+
+    /// Summarizes the user's drawing per screenshot, in the model's coordinates.
+    private static func markings(from strokes: [[CGPoint]], on screens: [CapturedScreen], coordinateConvention: CoordinateConvention) -> [UserScreenMarking] {
+        screens.compactMap { screen in
+            let pointsOnScreen = strokes.joined().filter { screen.geometry.frameInAppKitGlobalCoordinates.contains($0) }
+            guard !pointsOnScreen.isEmpty else { return nil }
+            let bounds = DrawingOverlayController.boundingBox(of: Array(pointsOnScreen))
+            let topLeftPixel = ScreenGeometry.imagePixel(fromAppKitGlobalPoint: CGPoint(x: bounds.minX, y: bounds.maxY), on: screen.geometry)
+            let bottomRightPixel = ScreenGeometry.imagePixel(fromAppKitGlobalPoint: CGPoint(x: bounds.maxX, y: bounds.minY), on: screen.geometry)
+            let topLeft = coordinateConvention.modelPoint(fromImagePixel: topLeftPixel, imagePixelSize: screen.geometry.imagePixelSize)
+            let bottomRight = coordinateConvention.modelPoint(fromImagePixel: bottomRightPixel, imagePixelSize: screen.geometry.imagePixelSize)
+            return UserScreenMarking(
+                screenNumber: screen.geometry.screenNumber,
+                minimumX: Double(topLeft.x), minimumY: Double(topLeft.y),
+                maximumX: Double(bottomRight.x), maximumY: Double(bottomRight.y)
             )
         }
-        guard isCurrent(interactionIdentifier) else { return }
-        if !speechSpeaker.isSpeaking {
-            finishInteraction()
+    }
+
+    /// Screenshots are the expensive part of a request; after a few action steps only the newest one matters.
+    private static func keepingOnlyNewestScreenshots(in messages: [ChatMessage]) -> [ChatMessage] {
+        guard let newestIndexWithImage = messages.lastIndex(where: \.containsImage) else { return messages }
+        return messages.enumerated().map { index, message in
+            guard index != newestIndexWithImage, message.containsImage else { return message }
+            var trimmedMessage = message
+            trimmedMessage.parts = message.parts.map { part in
+                if case .jpegImage = part { return .text("[older screenshot removed]") }
+                return part
+            }
+            return trimmedMessage
         }
     }
 
@@ -418,6 +684,7 @@ final class CompanionSession: ObservableObject {
 
     private func finishInteraction() {
         state = .idle
+        drawingOverlayController.clear()
         if overlayController.isShowingPointing {
             // The pointing watcher hides the overlay once the user clicks or the window moves.
             return
@@ -445,37 +712,14 @@ final class CompanionSession: ObservableObject {
             return
         }
 
-        let primaryScreenHeight = NSScreen.primaryScreenHeight
-        let ownProcessIdentifier = ProcessInfo.processInfo.processIdentifier
         let stepsToShow = Array(pointingInstructions.prefix(Self.maximumPointingSteps))
 
         for (stepIndex, instruction) in stepsToShow.enumerated() {
             guard isCurrent(interactionIdentifier) else { return }
-            guard let screen = capturedScreens.first(where: { $0.geometry.screenNumber == instruction.screenNumber }) ?? capturedScreens.first else { continue }
-
-            let imagePixel = coordinateConvention.imagePixelPoint(modelX: instruction.x, modelY: instruction.y, imagePixelSize: screen.geometry.imagePixelSize)
-            var targetPoint = ScreenGeometry.appKitGlobalPoint(fromImagePixel: imagePixel, on: screen.geometry)
-            var highlightRect: CGRect?
-
-            // Snap to the real control under the point when Accessibility knows about it.
-            let quartzPoint = ScreenGeometry.quartzGlobalPoint(fromAppKitGlobalPoint: targetPoint, primaryScreenHeight: primaryScreenHeight)
-            if let element = accessibilityInspector.interactiveElement(atQuartzGlobalPoint: quartzPoint),
-               element.processIdentifier != ownProcessIdentifier {
-                let elementRect = ScreenGeometry.appKitGlobalRect(fromQuartzGlobalRect: element.frameInQuartzGlobalCoordinates, primaryScreenHeight: primaryScreenHeight)
-                let elementCenter = CGPoint(x: elementRect.midX, y: elementRect.midY)
-                if AccessibilitySnapPolicy.shouldSnap(
-                    role: element.role,
-                    elementFrame: elementRect,
-                    screenFrame: screen.geometry.frameInAppKitGlobalCoordinates,
-                    distanceFromTargetPoint: ScreenGeometry.distance(from: targetPoint, to: elementCenter)
-                ) {
-                    highlightRect = elementRect
-                    targetPoint = elementCenter
-                }
-            }
+            guard let resolvedTarget = resolveTarget(of: instruction, on: capturedScreens, coordinateConvention: coordinateConvention) else { continue }
 
             let label = stepsToShow.count > 1 ? "\(stepIndex + 1). \(instruction.label)" : instruction.label
-            await overlayController.flyCursor(to: targetPoint, highlightRect: highlightRect, label: label)
+            await overlayController.flyCursor(to: resolvedTarget.point, highlightRect: resolvedTarget.highlightRect, label: label)
             if stepIndex < stepsToShow.count - 1 {
                 try? await Task.sleep(nanoseconds: 1_800_000_000)
             }
@@ -551,6 +795,7 @@ final class CompanionSession: ObservableObject {
     private func fail(with message: String) {
         state = .failed(message: message)
         lastAnswerText = message
+        drawingOverlayController.clear()
         overlayController.beginInteractionIfHidden(activity: .error)
         overlayController.setActivity(.error)
         overlayController.setBubbleText(message)

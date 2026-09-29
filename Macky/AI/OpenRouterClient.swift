@@ -8,7 +8,7 @@ final class OpenRouterClient: @unchecked Sendable {
 
     struct CollectedResponse {
         var text: String
-        var toolCalls: [(name: String, argumentsJSON: String)]
+        var toolCalls: [ChatToolCall]
         var usage: TokenUsage?
     }
 
@@ -84,8 +84,8 @@ final class OpenRouterClient: @unchecked Sendable {
             switch event {
             case .textDelta(let text):
                 collectedResponse.text += text
-            case .toolCall(let name, let argumentsJSON):
-                collectedResponse.toolCalls.append((name: name, argumentsJSON: argumentsJSON))
+            case .toolCall(let toolCall):
+                collectedResponse.toolCalls.append(toolCall)
             case .usage(let usage):
                 collectedResponse.usage = usage
             case .finished:

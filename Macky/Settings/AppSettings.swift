@@ -32,6 +32,23 @@ enum WhisperModelVariant: String, CaseIterable, Identifiable {
     }
 }
 
+/// Whether Macky may click and type on the computer when asked to.
+enum ActionMode: String, CaseIterable, Identifiable {
+    case disabled
+    case askFirst
+    case automatic
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .disabled: return "Dezactivat (doar arată)"
+        case .askFirst: return "Întreabă înainte de fiecare acțiune (recomandat)"
+        case .automatic: return "Automat, fără confirmare"
+        }
+    }
+}
+
 enum CoordinateConventionChoice: String, CaseIterable, Identifiable {
     case automatic
     case imagePixels
@@ -75,6 +92,13 @@ final class AppSettings: ObservableObject {
     @Published var maximumScreenshotLongEdge: Int { didSet { defaults.set(maximumScreenshotLongEdge, forKey: Keys.maximumScreenshotLongEdge) } }
     @Published var excludedApplicationBundleIdentifiers: [String] { didSet { defaults.set(excludedApplicationBundleIdentifiers, forKey: Keys.excludedApplicationBundleIdentifiers) } }
 
+    @Published var actionMode: ActionMode { didSet { defaults.set(actionMode.rawValue, forKey: Keys.actionMode) } }
+    /// Holding the talk hotkey lets the user draw on screen with the mouse to mark what they mean.
+    @Published var drawingEnabled: Bool { didSet { defaults.set(drawingEnabled, forKey: Keys.drawingEnabled) } }
+    /// The panel drops down from the MacBook notch when the mouse touches it.
+    @Published var notchPanelEnabled: Bool { didSet { defaults.set(notchPanelEnabled, forKey: Keys.notchPanelEnabled) } }
+    @Published var showMenuBarIcon: Bool { didSet { defaults.set(showMenuBarIcon, forKey: Keys.showMenuBarIcon) } }
+
     @Published var rememberedExchangeCount: Int { didSet { defaults.set(rememberedExchangeCount, forKey: Keys.rememberedExchangeCount) } }
     /// Models that answered "tool use not supported"; they get text tags instead of the point_at tool.
     @Published private(set) var modelsWithoutToolCalling: Set<String> { didSet { defaults.set(Array(modelsWithoutToolCalling), forKey: Keys.modelsWithoutToolCalling) } }
@@ -97,7 +121,11 @@ final class AppSettings: ObservableObject {
             Keys.captureAllScreens: false,
             Keys.maximumScreenshotLongEdge: 1280,
             Keys.rememberedExchangeCount: 6,
-            Keys.excludedApplicationBundleIdentifiers: Self.defaultExcludedApplicationBundleIdentifiers
+            Keys.excludedApplicationBundleIdentifiers: Self.defaultExcludedApplicationBundleIdentifiers,
+            Keys.actionMode: ActionMode.askFirst.rawValue,
+            Keys.drawingEnabled: true,
+            Keys.notchPanelEnabled: true,
+            Keys.showMenuBarIcon: false
         ])
 
         fastModelIdentifier = defaults.string(forKey: Keys.fastModelIdentifier) ?? ""
@@ -116,6 +144,10 @@ final class AppSettings: ObservableObject {
         captureAllScreens = defaults.bool(forKey: Keys.captureAllScreens)
         maximumScreenshotLongEdge = defaults.integer(forKey: Keys.maximumScreenshotLongEdge)
         excludedApplicationBundleIdentifiers = defaults.stringArray(forKey: Keys.excludedApplicationBundleIdentifiers) ?? Self.defaultExcludedApplicationBundleIdentifiers
+        actionMode = ActionMode(rawValue: defaults.string(forKey: Keys.actionMode) ?? "") ?? .askFirst
+        drawingEnabled = defaults.bool(forKey: Keys.drawingEnabled)
+        notchPanelEnabled = defaults.bool(forKey: Keys.notchPanelEnabled)
+        showMenuBarIcon = defaults.bool(forKey: Keys.showMenuBarIcon)
         rememberedExchangeCount = defaults.integer(forKey: Keys.rememberedExchangeCount)
         modelsWithoutToolCalling = Set(defaults.stringArray(forKey: Keys.modelsWithoutToolCalling) ?? [])
     }
@@ -170,5 +202,9 @@ final class AppSettings: ObservableObject {
         static let excludedApplicationBundleIdentifiers = "excludedApplicationBundleIdentifiers"
         static let rememberedExchangeCount = "rememberedExchangeCount"
         static let modelsWithoutToolCalling = "modelsWithoutToolCalling"
+        static let actionMode = "actionMode"
+        static let drawingEnabled = "drawingEnabled"
+        static let notchPanelEnabled = "notchPanelEnabled"
+        static let showMenuBarIcon = "showMenuBarIcon"
     }
 }

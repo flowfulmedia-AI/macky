@@ -154,7 +154,7 @@ final class CalibrationRunner: ObservableObject {
                         ChatMessage(role: .system, text: systemPrompt),
                         ChatMessage(role: .user, parts: [.text(userText), .jpegImage(base64EncodedData: screen.jpegData.base64EncodedString())])
                     ],
-                    includePointingTool: useToolCalling,
+                    tools: useToolCalling ? [.pointAt] : [],
                     coordinateConvention: coordinateConvention
                 )
                 let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey)

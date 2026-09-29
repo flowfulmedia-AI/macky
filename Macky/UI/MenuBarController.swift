@@ -21,7 +21,16 @@ final class MenuBarController: NSObject {
         self.makePanelContent = makePanelContent
     }
 
+    func uninstall() {
+        hidePanel()
+        if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+        statusItem = nil
+    }
+
     func install() {
+        guard statusItem == nil else { return }
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
             let image = NSImage(systemSymbolName: "cursorarrow.rays", accessibilityDescription: "Macky")

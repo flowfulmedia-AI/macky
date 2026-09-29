@@ -40,7 +40,8 @@ final class ScreenCaptureService {
         includeAllScreens: Bool,
         maximumLongEdge: Int,
         excludedBundleIdentifiers: Set<String>,
-        alwaysIncludedWindowNumbers: [Int] = []
+        alwaysIncludedWindowNumbers: [Int] = [],
+        userDrawingStrokes: [[CGPoint]] = []
     ) async throws -> [CapturedScreen] {
         guard CGPreflightScreenCaptureAccess() else { throw ScreenCaptureError.permissionMissing }
 
@@ -81,14 +82,15 @@ final class ScreenCaptureService {
             streamConfiguration.showsCursor = true
 
             let capturedImage = try await SCScreenshotManager.captureImage(contentFilter: contentFilter, configuration: streamConfiguration)
-            guard let jpegData = Self.jpegData(from: capturedImage) else { throw ScreenCaptureError.imageEncodingFailed }
-
             let geometry = CapturedScreenGeometry(
                 screenNumber: capturedScreens.count + 1,
                 displayIdentifier: displayIdentifier,
                 frameInAppKitGlobalCoordinates: screen.frame,
                 imagePixelSize: CGSize(width: capturedImage.width, height: capturedImage.height)
             )
+            // Macky's own windows are never captured, so the user's drawing is painted onto the image here.
+            let imageToSend = Self.image(capturedImage, annotatedWith: userDrawingStrokes, on: geometry) ?? capturedImage
+            guard let jpegData = Self.jpegData(from: imageToSend) else { throw ScreenCaptureError.imageEncodingFailed }
             capturedScreens.append(CapturedScreen(
                 geometry: geometry,
                 jpegData: jpegData,
@@ -99,6 +101,44 @@ final class ScreenCaptureService {
 
         guard !capturedScreens.isEmpty else { throw ScreenCaptureError.noDisplayFound }
         return capturedScreens
+    }
+
+    /// Draws strokes (AppKit global points) onto a screenshot in Macky's accent color.
+    /// Returns nil when no stroke touches this screen.
+    private static func image(_ image: CGImage, annotatedWith strokes: [[CGPoint]], on geometry: CapturedScreenGeometry) -> CGImage? {
+        let strokesOnThisScreen = strokes.filter { stroke in
+            stroke.contains { geometry.frameInAppKitGlobalCoordinates.contains($0) }
+        }
+        guard !strokesOnThisScreen.isEmpty,
+              let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+              ) else { return nil }
+
+        let imageHeight = CGFloat(image.height)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixelsPerPoint = CGFloat(geometry.imagePixelSize.width / geometry.frameInAppKitGlobalCoordinates.width)
+        context.setStrokeColor(CGColor(red: 0.20, green: 0.84, blue: 0.70, alpha: 1))
+        context.setLineWidth(max(3, 4 * pixelsPerPoint))
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+
+        for stroke in strokesOnThisScreen where stroke.count > 1 {
+            // Image pixels have y pointing down; the bitmap context has y pointing up.
+            let contextPoints = stroke.map { globalPoint -> CGPoint in
+                let pixel = ScreenGeometry.imagePixel(fromAppKitGlobalPoint: globalPoint, on: geometry)
+                return CGPoint(x: pixel.x, y: imageHeight - pixel.y)
+            }
+            context.addLines(between: contextPoints)
+            context.strokePath()
+        }
+        return context.makeImage()
     }
 
     private static func jpegData(from image: CGImage) -> Data? {

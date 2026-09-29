@@ -15,7 +15,7 @@ public struct TokenUsage: Equatable, Sendable {
 
 public enum LLMStreamEvent: Equatable, Sendable {
     case textDelta(String)
-    case toolCall(name: String, argumentsJSON: String)
+    case toolCall(ChatToolCall)
     case usage(TokenUsage)
     case finished(reason: String)
 }
@@ -79,6 +79,7 @@ public struct OpenRouterAPIError: Error, Equatable, LocalizedError {
 /// accumulated per tool call index and only emitted once the stream finishes.
 public struct OpenRouterStreamDecoder {
     private struct PartialToolCall {
+        var identifier: String = ""
         var name: String = ""
         var argumentsJSON: String = ""
     }
@@ -137,6 +138,9 @@ public struct OpenRouterStreamDecoder {
         for (positionInChunk, fragment) in toolCallFragments.enumerated() {
             let index = Self.integerValue(fragment["index"]) ?? positionInChunk
             var partialToolCall = partialToolCallsByIndex[index] ?? PartialToolCall()
+            if let identifier = fragment["id"] as? String, !identifier.isEmpty {
+                partialToolCall.identifier = identifier
+            }
             if let function = fragment["function"] as? [String: Any] {
                 if let name = function["name"] as? String { partialToolCall.name += name }
                 if let arguments = function["arguments"] as? String { partialToolCall.argumentsJSON += arguments }
@@ -150,7 +154,11 @@ public struct OpenRouterStreamDecoder {
         haveEmittedToolCalls = true
         return partialToolCallsByIndex.keys.sorted().compactMap { index in
             guard let toolCall = partialToolCallsByIndex[index], !toolCall.name.isEmpty else { return nil }
-            return .toolCall(name: toolCall.name, argumentsJSON: toolCall.argumentsJSON)
+            // Some providers omit ids; the model still needs one to match our tool results.
+            let identifier = toolCall.identifier.isEmpty ? "call_\(index)" : toolCall.identifier
+            // An empty argument string means "no arguments"; "{}" keeps it valid JSON when sent back.
+            let argumentsJSON = toolCall.argumentsJSON.isEmpty ? "{}" : toolCall.argumentsJSON
+            return .toolCall(ChatToolCall(identifier: identifier, name: toolCall.name, argumentsJSON: argumentsJSON))
         }
     }
 

@@ -26,7 +26,7 @@ final class OpenRouterStreamDecoderTests: XCTestCase {
         XCTAssertEqual(events, [])
         events += try decoder.consume(dataPayload: #"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#)
         XCTAssertEqual(events, [
-            .toolCall(name: "point_at", argumentsJSON: #"{"screen":1,"x":120,"y":40,"label":"Export"}"#),
+            .toolCall(ChatToolCall(identifier: "c1", name: "point_at", argumentsJSON: #"{"screen":1,"x":120,"y":40,"label":"Export"}"#)),
             .finished(reason: "tool_calls")
         ])
         XCTAssertEqual(decoder.finish(), [], "tool calls must not be emitted twice")
@@ -37,8 +37,8 @@ final class OpenRouterStreamDecoderTests: XCTestCase {
         _ = try decoder.consume(dataPayload: #"{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"name":"point_at","arguments":"{\"x\":2,\"y\":2}"}},{"index":0,"function":{"name":"point_at","arguments":"{\"x\":1,\"y\":1}"}}]}}]}"#)
         let events = decoder.finish()
         XCTAssertEqual(events, [
-            .toolCall(name: "point_at", argumentsJSON: #"{"x":1,"y":1}"#),
-            .toolCall(name: "point_at", argumentsJSON: #"{"x":2,"y":2}"#)
+            .toolCall(ChatToolCall(identifier: "call_0", name: "point_at", argumentsJSON: #"{"x":1,"y":1}"#)),
+            .toolCall(ChatToolCall(identifier: "call_1", name: "point_at", argumentsJSON: #"{"x":2,"y":2}"#))
         ])
     }
 
@@ -72,7 +72,7 @@ final class RequestBuilderTests: XCTestCase {
         ]
         let data = try OpenRouterRequestBuilder.makeChatCompletionBody(
             modelIdentifier: "anthropic/claude-sonnet", messages: messages,
-            includePointingTool: true, coordinateConvention: .imagePixels)
+            tools: [.pointAt], coordinateConvention: .imagePixels)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "anthropic/claude-sonnet")
         XCTAssertEqual(json["stream"] as? Bool, true)
@@ -92,7 +92,7 @@ final class RequestBuilderTests: XCTestCase {
     func testOmitsToolsWhenDisabled() throws {
         let data = try OpenRouterRequestBuilder.makeChatCompletionBody(
             modelIdentifier: "m", messages: [ChatMessage(role: .user, text: "hi")],
-            includePointingTool: false, coordinateConvention: .imagePixels)
+            tools: [], coordinateConvention: .imagePixels)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertNil(json["tools"])
         XCTAssertNil(json["tool_choice"])

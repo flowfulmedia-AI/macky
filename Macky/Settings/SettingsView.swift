@@ -288,6 +288,23 @@ private struct GeneralSettingsTab: View {
                     .font(.caption).foregroundColor(.secondary)
             }
 
+            Section("Acțiuni pe calculator") {
+                Picker("Macky poate apăsa și scrie", selection: $settings.actionMode) {
+                    ForEach(ActionMode.allCases) { mode in Text(mode.displayName).tag(mode) }
+                }
+                Text("Spune de exemplu „apasă tu pe Export” sau „caută pisici pe YouTube”. Macky face câte un pas, verifică pe ecran și continuă. O nouă apăsare pe scurtătură îl oprește imediat. Funcționează doar cu modele care „arată prin tool”.")
+                    .font(.caption).foregroundColor(.secondary)
+                Toggle("Desenează pe ecran cât ții apăsată scurtătura (încercuiește ce vrei să întrebi)", isOn: $settings.drawingEnabled)
+            }
+
+            Section("Unde stă Macky") {
+                Toggle("Panoul coboară din notch când duci mouse-ul acolo", isOn: $settings.notchPanelEnabled)
+                Toggle("Arată și iconița din bara de meniu", isOn: $settings.showMenuBarIcon)
+                    .disabled(!settings.notchPanelEnabled)
+                Text("Pe Mac-urile fără notch, zona din mijlocul barei de meniu ține locul notch-ului.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
             Section("Ecran") {
                 Toggle("Trimite toate monitoarele (implicit doar cel cu mouse-ul)", isOn: $settings.captureAllScreens)
                 Picker("Rezoluția capturii", selection: $settings.maximumScreenshotLongEdge) {

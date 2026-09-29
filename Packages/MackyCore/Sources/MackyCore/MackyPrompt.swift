@@ -57,7 +57,23 @@ public struct FrontmostApplicationContext: Equatable, Sendable {
 }
 
 public enum MackyPrompt {
-    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode) -> String {
+    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false) -> String {
+        basePrompt(language: language, pointingMode: pointingMode) + (actionsEnabled ? actionInstructions : "")
+    }
+
+    static let actionInstructions = """
+
+
+        Acting on the computer:
+        - You can operate the computer with the click, type_text and press_keys tools, but ONLY when the user explicitly asks you to do something for them ("click it", "open it", "do it for me", "search for..."). For questions like "where is" or "how do I", only explain and point.
+        - Before acting, say in one short sentence what you are about to do.
+        - Work step by step. After your actions you receive a new screenshot: check that the previous step worked, then continue. When the task is done, say so briefly and do not call any more action tools.
+        - To type into a field, click it first, then call type_text.
+        - Never send messages, emails or posts, buy anything, delete anything or change security settings unless the user asked for exactly that.
+        - If a step fails twice, stop and tell the user what went wrong.
+        """
+
+    static func basePrompt(language: ResponseLanguage, pointingMode: PointingMode) -> String {
         """
         You are Macky, a friendly assistant that lives next to the user's mouse cursor on their Mac. \
         You can see screenshots of the user's screen and you speak your answers out loud.
@@ -82,7 +98,8 @@ public enum MackyPrompt {
         question: String,
         screenshots: [ScreenshotDescription],
         frontmostApplication: FrontmostApplicationContext?,
-        coordinateConvention: CoordinateConvention
+        coordinateConvention: CoordinateConvention,
+        userMarkings: [UserScreenMarking] = []
     ) -> String {
         var lines: [String] = []
         if let frontmostApplication, let applicationName = frontmostApplication.applicationName {
@@ -101,8 +118,25 @@ public enum MackyPrompt {
         if screenshots.isEmpty {
             lines.append("No screenshot is available for this question.")
         }
+        for marking in userMarkings {
+            lines.append(String(
+                format: "The user drew a mark on screenshot %d (the colored stroke you can see), around x %.0f–%.0f, y %.0f–%.0f. When they say \"this\", \"here\" or \"that\", they mean what is inside or under this mark.",
+                marking.screenNumber, marking.minimumX, marking.maximumX, marking.minimumY, marking.maximumY
+            ))
+        }
         lines.append("")
         lines.append("User: \(question)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Sent with the fresh screenshot after Macky performed actions, so the model can verify and continue.
+    public static func afterActionsMessageText(screenshots: [ScreenshotDescription], coordinateConvention: CoordinateConvention) -> String {
+        var lines = ["This is the screen after your actions."]
+        for screenshot in screenshots {
+            lines.append("Screenshot \(screenshot.screenNumber) (\(screenshot.displayName)): "
+                + coordinateConvention.promptDescription(imageWidth: Int(screenshot.imagePixelSize.width), imageHeight: Int(screenshot.imagePixelSize.height)) + ".")
+        }
+        lines.append("Check the result. If the task is not finished, do the next step. If it is finished, tell the user briefly without calling action tools.")
         return lines.joined(separator: "\n")
     }
 }

@@ -115,7 +115,7 @@ public enum SpotifyCommandMatcher {
         return nil
     }
 
-    static func fold(_ text: String) -> String {
+    public static func fold(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 

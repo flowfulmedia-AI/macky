@@ -101,3 +101,21 @@ public enum QuickCommandMatcher {
         "melodia", "muzica", "muzică", "setarile", "setările", "a ", "an ", "the ", "new ", "file", "window", "settings"
     ]
 }
+
+/// "Agent, caută…" / "În fundal: compară…" start a background job directly, without the model deciding.
+public enum BackgroundTaskTrigger {
+    private static let leadingTriggerPattern = #"^\s*(macky[\s,]+)?(agentule|agent|[îi]n fundal|in background|background agent)\b[\s,:;!.-]*"#
+    private static let trailingTriggerPattern = #"[\s,]+([îi]n fundal|in the background)[\s.!]*$"#
+
+    public static func goal(from transcript: String) -> String? {
+        for pattern in [leadingTriggerPattern, trailingTriggerPattern] {
+            guard let range = transcript.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { continue }
+            var goal = transcript
+            goal.removeSubrange(range)
+            goal = goal.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",.:;!")))
+            // "Agent" alone is not a task.
+            return goal.split(separator: " ").count >= 2 ? goal : nil
+        }
+        return nil
+    }
+}

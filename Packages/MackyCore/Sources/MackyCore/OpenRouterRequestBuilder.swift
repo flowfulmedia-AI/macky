@@ -11,13 +11,33 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case runAppleScript = "run_applescript"
     case clickElement = "click_element"
     case spotify = "spotify"
+    case systemControl = "system_control"
+    case createEvent = "create_event"
+    case listEvents = "list_events"
+    case createReminder = "create_reminder"
+    case listReminders = "list_reminders"
+    case createNote = "create_note"
+    case arrangeWindow = "arrange_window"
+    case startBackgroundTask = "start_background_task"
     /// Not an action: the model calls it next to its last actions to say no check is needed.
     case taskDone = "task_done"
+    // Tools of background agent jobs only.
+    case webSearch = "web_search"
+    case fetchURL = "fetch_url"
+    case saveFile = "save_file"
+    case finishTask = "finish_task"
 
     /// Tools that change something on the computer (as opposed to only showing).
-    public static let actionTools: [MackyTool] = [.spotify, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript]
+    public static let actionTools: [MackyTool] = [
+        .spotify, .systemControl, .createEvent, .listEvents, .createReminder, .listReminders, .createNote, .arrangeWindow,
+        .startBackgroundTask, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
+    ]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
+    /// Offered to background agent jobs, which never touch the screen.
+    public static let backgroundAgentTools: [MackyTool] = [
+        .webSearch, .fetchURL, .saveFile, .createNote, .createEvent, .listEvents, .createReminder, .listReminders, .finishTask
+    ]
 
     public var isAction: Bool { Self.actionTools.contains(self) }
 }
@@ -135,6 +155,93 @@ public enum OpenRouterRequestBuilder {
                 "kind": ["type": "string", "enum": ["track", "album", "artist", "playlist"], "description": "For action=play; default track."]
             ]
             required = ["action"]
+        case .systemControl:
+            description = "Changes Mac settings instantly: volume, mute, screen brightness, dark mode, lock the screen, turn the display off."
+            properties = [
+                "action": ["type": "string", "enum": [
+                    "set_volume", "volume_up", "volume_down", "mute", "unmute", "brightness_up", "brightness_down",
+                    "dark_mode_on", "dark_mode_off", "dark_mode_toggle", "lock_screen", "sleep_display"
+                ]],
+                "value": ["type": "integer", "description": "For set_volume: 0-100."]
+            ]
+            required = ["action"]
+        case .createEvent:
+            description = "Adds an event to the user's Calendar. Use the current date and time given in the message to resolve words like 'mâine' or 'joi'."
+            properties = [
+                "title": ["type": "string"],
+                "start": ["type": "string", "description": "Local start time, ISO 8601, e.g. 2026-10-02T15:00:00."],
+                "end": ["type": "string", "description": "Local end time, ISO 8601. Default: one hour after start."],
+                "all_day": ["type": "boolean"],
+                "location": ["type": "string"],
+                "notes": ["type": "string"]
+            ]
+            required = ["title", "start"]
+        case .listEvents:
+            description = "Reads the user's Calendar events between two local times (ISO 8601). The result lists them; then tell the user briefly."
+            properties = [
+                "from": ["type": "string", "description": "e.g. 2026-10-02T00:00:00"],
+                "to": ["type": "string", "description": "e.g. 2026-10-02T23:59:59"]
+            ]
+            required = ["from", "to"]
+        case .createReminder:
+            description = "Adds a reminder to the user's Reminders app, optionally with a due time that triggers an alert."
+            properties = [
+                "title": ["type": "string"],
+                "due": ["type": "string", "description": "Local due time, ISO 8601. Omit for no due time."],
+                "notes": ["type": "string"]
+            ]
+            required = ["title"]
+        case .listReminders:
+            description = "Reads the user's open (not completed) reminders."
+            properties = [
+                "limit": ["type": "integer", "description": "Maximum number to return, default 20."]
+            ]
+            required = []
+        case .createNote:
+            description = "Creates a note in the Apple Notes app."
+            properties = [
+                "title": ["type": "string"],
+                "body": ["type": "string", "description": "Plain text; new lines allowed."]
+            ]
+            required = ["title", "body"]
+        case .arrangeWindow:
+            description = "Moves and resizes an app's front window: left or right half, top or bottom half, full screen area, or centered. "
+                + "Use two calls to put two apps side by side."
+            properties = [
+                "app": ["type": "string", "description": "Application name, e.g. 'Safari'. Omit for the app in front."],
+                "layout": ["type": "string", "enum": ["left", "right", "top", "bottom", "full", "center"]]
+            ]
+            required = ["layout"]
+        case .startBackgroundTask:
+            description = "Starts a background agent for long jobs that do not need the screen: web research, comparing products, "
+                + "summarizing pages, writing a document or note, planning. It works while the user does other things and reports when done. "
+                + "Use it when the user says 'agent', 'în fundal', or asks for research or a long piece of writing."
+            properties = [
+                "goal": ["type": "string", "description": "The full task in the user's words, with every detail they gave."]
+            ]
+            required = ["goal"]
+        case .webSearch:
+            description = "Searches the web and returns the top results with their URLs and short summaries."
+            properties = ["query": ["type": "string"]]
+            required = ["query"]
+        case .fetchURL:
+            description = "Downloads a web page and returns its readable text (truncated)."
+            properties = ["url": ["type": "string"]]
+            required = ["url"]
+        case .saveFile:
+            description = "Saves a text or Markdown file into the user's Macky folder (Documents/Macky) and returns its path."
+            properties = [
+                "file_name": ["type": "string", "description": "e.g. 'microfoane.md'"],
+                "content": ["type": "string"]
+            ]
+            required = ["file_name", "content"]
+        case .finishTask:
+            description = "Ends the background task with the final answer for the user."
+            properties = [
+                "summary": ["type": "string", "description": "2-4 sentences in the user's language: what you found or did."],
+                "saved_file_path": ["type": "string", "description": "Path returned by save_file, if any."]
+            ]
+            required = ["summary"]
         case .taskDone:
             description = "Call this in the same response as your final actions when they certainly complete the task, "
                 + "so no new screenshot is needed. Do not call it if you need to check the result."

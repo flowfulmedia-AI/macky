@@ -25,6 +25,14 @@ public enum ScreenAction: Equatable, Sendable {
     /// Presses an element found by name in the accessibility tree; nil application means the app in front.
     case clickElement(label: String, applicationName: String?)
     case spotify(SpotifyCommand)
+    case system(SystemCommand)
+    case createEvent(CalendarEventRequest)
+    case listEvents(from: Date, to: Date)
+    case createReminder(title: String, dueDate: Date?, notes: String?)
+    case listReminders(limit: Int)
+    case createNote(title: String, body: String)
+    case arrangeWindow(applicationName: String?, layout: WindowLayout)
+    case startBackgroundTask(goal: String)
     /// Plays, pauses or skips in whatever app is playing media (the keyboard's media keys).
     case mediaKey(MediaKey)
 
@@ -62,7 +70,38 @@ public enum ScreenAction: Equatable, Sendable {
         case .spotify:
             guard let command = SpotifyCommand(toolArgumentsJSON: toolCall.argumentsJSON) else { return nil }
             self = .spotify(command)
-        case .pointAt, .taskDone:
+        case .systemControl:
+            guard let command = SystemCommand(toolArgumentsJSON: toolCall.argumentsJSON) else { return nil }
+            self = .system(command)
+        case .createEvent:
+            guard let title = Self.nonEmptyString(arguments["title"]),
+                  let startDate = FlexibleDateParser.date(from: arguments["start"] as? String) else { return nil }
+            let isAllDay = (arguments["all_day"] as? Bool) ?? false
+            let endDate = FlexibleDateParser.date(from: arguments["end"] as? String)
+                ?? startDate.addingTimeInterval(isAllDay ? 24 * 3600 : 3600)
+            self = .createEvent(CalendarEventRequest(
+                title: title, startDate: startDate, endDate: max(endDate, startDate.addingTimeInterval(60)), isAllDay: isAllDay,
+                location: Self.nonEmptyString(arguments["location"]), notes: Self.nonEmptyString(arguments["notes"])
+            ))
+        case .listEvents:
+            guard let fromDate = FlexibleDateParser.date(from: arguments["from"] as? String),
+                  let toDate = FlexibleDateParser.date(from: arguments["to"] as? String) else { return nil }
+            self = .listEvents(from: fromDate, to: max(toDate, fromDate))
+        case .createReminder:
+            guard let title = Self.nonEmptyString(arguments["title"]) else { return nil }
+            self = .createReminder(title: title, dueDate: FlexibleDateParser.date(from: arguments["due"] as? String), notes: Self.nonEmptyString(arguments["notes"]))
+        case .listReminders:
+            self = .listReminders(limit: min(max(OpenRouterStreamDecoder.integerValue(arguments["limit"]) ?? 20, 1), 100))
+        case .createNote:
+            guard let title = Self.nonEmptyString(arguments["title"]) else { return nil }
+            self = .createNote(title: title, body: (arguments["body"] as? String) ?? "")
+        case .arrangeWindow:
+            guard let layout = WindowLayout(rawValue: ((arguments["layout"] as? String) ?? "").lowercased()) else { return nil }
+            self = .arrangeWindow(applicationName: Self.nonEmptyString(arguments["app"]), layout: layout)
+        case .startBackgroundTask:
+            guard let goal = Self.nonEmptyString(arguments["goal"]) else { return nil }
+            self = .startBackgroundTask(goal: goal)
+        case .pointAt, .taskDone, .webSearch, .fetchURL, .saveFile, .finishTask:
             return nil
         }
     }
@@ -92,7 +131,36 @@ public enum ScreenAction: Equatable, Sendable {
             return mediaKey.displayName
         case .spotify(let command):
             return command.userFacingDescription
+        case .system(let command):
+            return command.userFacingDescription
+        case .createEvent(let request):
+            return "Adaugă în calendar „\(request.title)” (\(FlexibleDateParser.shortDescription(of: request.startDate)))"
+        case .listEvents:
+            return "Citește calendarul"
+        case .createReminder(let title, let dueDate, _):
+            return "Reminder „\(title)”" + (dueDate.map { " (\(FlexibleDateParser.shortDescription(of: $0)))" } ?? "")
+        case .listReminders:
+            return "Citește reminderele"
+        case .createNote(let title, _):
+            return "Notiță nouă „\(title)”"
+        case .arrangeWindow(let applicationName, let layout):
+            return "Mută \(applicationName ?? "fereastra") \(layout.displayName)"
+        case .startBackgroundTask(let goal):
+            return "Agent în fundal: \(goal.count > 60 ? String(goal.prefix(60)) + "…" : goal)"
         }
+    }
+
+    /// Actions that only read, never change anything, so they need no confirmation.
+    public var isReadOnly: Bool {
+        switch self {
+        case .listEvents, .listReminders: return true
+        default: return false
+        }
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
     }
 }
 

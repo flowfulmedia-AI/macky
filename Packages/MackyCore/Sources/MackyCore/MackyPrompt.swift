@@ -74,6 +74,9 @@ public enum MackyPrompt {
           3. press_keys for keyboard shortcuts, type_text for text.
           4. run_applescript for simple app control (next track, pause, open a document).
           5. click with coordinates only when the element has no usable name.
+        - Dedicated tools beat the screen: system_control (volume, brightness, dark mode, lock), create_event / list_events (Calendar), create_reminder / list_reminders (Reminders), create_note (Notes), arrange_window (window layouts). Use them instead of clicking.
+        - For research, comparisons, summaries of web pages or long writing, call start_background_task with the full goal and say one short sentence like "Sigur, mă ocup în fundal!". Do not do such research yourself.
+        - When a tool returns information (events, reminders), tell the user the answer briefly in natural speech.
         - Music and Spotify: ALWAYS use the spotify tool (play by name, Liked Songs, pause, next...), never clicks. Call it with task_done in the same response.
           The spotify tool result says what is really playing; if it reports a failure, tell the user honestly.
         - Never claim something worked unless the tool result confirms it.
@@ -111,9 +114,10 @@ public enum MackyPrompt {
         screenshots: [ScreenshotDescription],
         frontmostApplication: FrontmostApplicationContext?,
         coordinateConvention: CoordinateConvention,
-        userMarkings: [UserScreenMarking] = []
+        userMarkings: [UserScreenMarking] = [],
+        now: Date = Date()
     ) -> String {
-        var lines: [String] = []
+        var lines: [String] = [FlexibleDateParser.currentDateContext(now: now)]
         if let frontmostApplication, let applicationName = frontmostApplication.applicationName {
             if let windowTitle = frontmostApplication.windowTitle, !windowTitle.isEmpty {
                 lines.append("Active app: \(applicationName) — window \"\(windowTitle)\".")

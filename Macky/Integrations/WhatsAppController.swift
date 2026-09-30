@@ -88,7 +88,8 @@ final class WhatsAppController: ObservableObject {
                                            sender: Self.text(statement, 4), text: text)
             }
             // Older databases have no group member table: fall back to the plain query.
-            return (try? Self.rows(database, withSenders, read)) ?? (try Self.rows(database, plain, read))
+            if let rows = try? Self.rows(database, withSenders, read) { return rows }
+            return try Self.rows(database, plain, read)
         }
         return (chat, messages)
     }

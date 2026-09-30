@@ -777,13 +777,13 @@ private struct AIAccountsPage: View {
         SettingsPage(title: "Claude și ChatGPT",
                      subtitle: "Adu în Macky conversațiile, proiectele și skill-urile din conturile tale, ca să le poată căuta, continua și folosi pentru agenți.") {
             SettingsGroup(title: "Conversații", footer: "Claude și ChatGPT nu permit altor aplicații să citească direct conturile, așa că folosim exportul oficial de date. Totul rămâne doar pe Mac-ul tău. Poți reimporta oricând un export nou: conversațiile se actualizează, nu se dublează.") {
-                accountRow(.claude, steps: "claude.ai → Settings → Privacy → Export data. Primești pe email un link către o arhivă .zip.")
+                accountRow(.claude, steps: "claude.ai → Settings → Privacy → Export data. Din email descarci fișierul .json (cuprinsul) și îl alegi aici: Macky descarcă și importă singur restul.")
                 SettingsDivider()
                 accountRow(.chatGPT, steps: "chatgpt.com → Settings → Data controls → Export data. Primești pe email o arhivă .zip.")
                 SettingsDivider()
                 SettingsBlock {
                     HStack {
-                        Button(store.isImporting ? "Import…" : "Importă arhiva (.zip)") { chooseExport() }
+                        Button(store.isImporting ? "Import…" : "Importă exportul (.zip sau .json)") { chooseExport() }
                             .buttonStyle(MackyPrimaryPillStyle())
                             .disabled(store.isImporting)
                         Spacer()

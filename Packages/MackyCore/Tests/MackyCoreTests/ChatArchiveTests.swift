@@ -93,3 +93,28 @@ final class ChatArchiveTests: XCTestCase {
         XCTAssertTrue(ScreenAction.readPastChat(title: "x").isReadOnly)
     }
 }
+
+final class ChatArchiveFormatTests: XCTestCase {
+    func testReadsTheNewClaudeManifest() {
+        let json = """
+        {"instructions":"Download each file","total_files":2,"data_files":[
+          {"batch_index":0,"export_url":"https://claude.ai/export/o/download/a","category":"light_metadata","part":0,"filename":"light_metadata-000.zip"},
+          {"batch_index":5,"export_url":"https://claude.ai/export/o/download/b","category":"conversations","part":0,"filename":"conversations-000.zip"}]}
+        """
+        let files = ChatArchiveKit.parseExportManifest(Data(json.utf8))
+        XCTAssertEqual(files?.count, 2)
+        XCTAssertEqual(files?.filter { ChatArchiveKit.usefulManifestCategories.contains($0.category) }.map(\.filename), ["conversations-000.zip"])
+        XCTAssertNil(ChatArchiveKit.parseExportManifest(Data("[]".utf8)))
+    }
+
+    func testReadsASingleWrappedOrRoleBasedChat() throws {
+        let single = #"{"id":"x","title":"Plan","messages":[{"role":"user","content":"Salut"},{"role":"assistant","content":[{"type":"text","text":"Bună"}]}]}"#
+        let chats = try ChatArchiveKit.parseConversations(Data(single.utf8))
+        XCTAssertEqual(chats.first?.title, "Plan")
+        XCTAssertEqual(chats.first?.messages.map(\.isFromUser), [true, false])
+        let wrapped = #"{"conversations":[{"uuid":"y","name":"A","chat_messages":[{"sender":"human","text":"hi"}]}]}"#
+        XCTAssertEqual(try ChatArchiveKit.parseConversations(Data(wrapped.utf8)).first?.id, "claude-y")
+        let project = #"{"uuid":"p","name":"Proiect","instructions":"Fă asta"}"#
+        XCTAssertEqual(try ChatArchiveKit.parseClaudeProjects(Data(project.utf8)).first?.instructions, "Fă asta")
+    }
+}

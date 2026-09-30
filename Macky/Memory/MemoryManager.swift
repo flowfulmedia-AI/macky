@@ -273,6 +273,19 @@ final class MemoryManager: ObservableObject {
 
     // MARK: Editing (Memory window)
 
+    /// Claude's own memory from its data export: kept as one editable item, replaced on each import.
+    func importClaudeMemory(_ text: String) {
+        let content = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4000))
+        guard !content.isEmpty else { return }
+        let subject = "Din memoria Claude"
+        if var existing = items.first(where: { $0.subject == subject }) {
+            existing.content = content
+            update(existing)
+        } else {
+            add(kind: .profile, subject: subject, content: content, isPinned: false)
+        }
+    }
+
     func add(kind: MemoryKind, subject: String, content: String, isPinned: Bool) {
         items.append(MemoryItem(kind: kind, subject: subject, content: content, source: .user, isPinned: isPinned))
         saveMemory()

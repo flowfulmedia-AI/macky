@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MackyCore
 
@@ -57,32 +58,128 @@ final class ChatArchiveStore: ObservableObject {
 
     // MARK: Import
 
-    /// Accepts the export's .zip, its unpacked folder, or conversations.json / projects.json on their own.
+    /// Called with the text of Claude's own memory when an export contains it.
+    var onClaudeMemory: (@MainActor (String) -> Void)?
+
+    private struct ExportContents: Sendable {
+        var chats: [ChatArchiveKit.Chat] = []
+        var projects: [ChatArchiveKit.Project] = []
+        var memoryText = ""
+    }
+
+    /// Accepts the export's .zip files, their unpacked folder, conversations.json / projects.json on their own,
+    /// or Claude's newer export manifest (a small .json that lists one download per category).
     func importExport(from url: URL) async {
+        if url.pathExtension.lowercased() == "json",
+           let data = try? Data(contentsOf: url), data.count < 1_000_000,
+           let files = ChatArchiveKit.parseExportManifest(data) {
+            await importFromManifest(files)
+            return
+        }
         isImporting = true
-        statusText = "Import…"
+        statusText = "Import \(url.lastPathComponent)…"
         defer { isImporting = false }
         do {
             let result = try await Task.detached(priority: .userInitiated) { try Self.readExport(at: url) }.value
-            guard !result.chats.isEmpty || !result.projects.isEmpty else {
-                statusText = "✗ Nu am găsit conversații în \(url.lastPathComponent). Alege arhiva .zip primită pe email de la Claude sau ChatGPT."
+            guard !result.chats.isEmpty || !result.projects.isEmpty || !result.memoryText.isEmpty else {
+                statusText = "✗ Nu am găsit conversații în \(url.lastPathComponent). Alege arhiva .zip sau fișierul .json primit de la Claude sau ChatGPT."
                 return
             }
-            let importedIdentifiers = Set(result.chats.map(\.id))
-            chats = chats.filter { !importedIdentifiers.contains($0.id) } + result.chats
-            if !result.projects.isEmpty {
-                let projectIdentifiers = Set(result.projects.map(\.id))
-                projects = projects.filter { !projectIdentifiers.contains($0.id) } + result.projects
-            }
-            for source in Set(result.chats.map(\.source)) { importDates[source.rawValue] = Date() }
-            if !result.projects.isEmpty { importDates[ChatArchiveKit.Source.claude.rawValue] = Date() }
-            await save()
-            let sourceNames = Set(result.chats.map(\.source.displayName)).sorted().joined(separator: " și ")
-            statusText = "Am importat \(result.chats.count) conversații" + (sourceNames.isEmpty ? "" : " din \(sourceNames)")
-                + (result.projects.isEmpty ? "." : " și \(result.projects.count) proiecte Claude.")
+            await merge(result)
         } catch {
             statusText = "✗ Nu am putut importa: \(error.localizedDescription)"
         }
+    }
+
+    /// Opens each useful download link in the browser (where the user is logged in to Claude),
+    /// then imports every .zip as soon as it lands in Downloads.
+    private func importFromManifest(_ files: [ChatArchiveKit.ExportManifestFile]) async {
+        let wanted = files.filter { ChatArchiveKit.usefulManifestCategories.contains($0.category) }
+        guard !wanted.isEmpty else {
+            statusText = "✗ Exportul nu conține conversații sau proiecte."
+            return
+        }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        // Already downloaded ones are imported directly; the links work only once.
+        var pending: [ChatArchiveKit.ExportManifestFile] = []
+        for file in wanted {
+            if let existing = Self.downloadedFile(named: file.filename, in: downloads, since: .distantPast) {
+                await importExport(from: existing)
+            } else {
+                pending.append(file)
+            }
+        }
+        guard !pending.isEmpty else { return }
+
+        isImporting = true
+        defer { isImporting = false }
+        let startDate = Date().addingTimeInterval(-5)
+        for file in pending { NSWorkspace.shared.open(file.url) }
+        statusText = "Am deschis \(pending.count) descărcări în browser (trebuie să fii logat în Claude). Aștept să apară în Downloads…"
+
+        var remaining = pending
+        let deadline = Date().addingTimeInterval(15 * 60)
+        while !remaining.isEmpty && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            for file in remaining {
+                guard let downloaded = Self.downloadedFile(named: file.filename, in: downloads, since: startDate),
+                      await Self.isFinishedDownloading(downloaded) else { continue }
+                remaining.removeAll { $0.filename == file.filename }
+                isImporting = false
+                await importExport(from: downloaded)
+                isImporting = true
+            }
+        }
+        if !remaining.isEmpty {
+            statusText = "✗ Nu au apărut în Downloads: \(remaining.map(\.filename).joined(separator: ", ")). Descarcă-le din linkurile din email și importă-le aici."
+        }
+    }
+
+    private func merge(_ result: ExportContents) async {
+        let importedIdentifiers = Set(result.chats.map(\.id))
+        chats = chats.filter { !importedIdentifiers.contains($0.id) } + result.chats
+        if !result.projects.isEmpty {
+            let projectIdentifiers = Set(result.projects.map(\.id))
+            projects = projects.filter { !projectIdentifiers.contains($0.id) } + result.projects
+        }
+        for source in Set(result.chats.map(\.source)) { importDates[source.rawValue] = Date() }
+        if !result.projects.isEmpty { importDates[ChatArchiveKit.Source.claude.rawValue] = Date() }
+        if !result.memoryText.isEmpty { onClaudeMemory?(result.memoryText) }
+        await save()
+        var parts: [String] = []
+        if !result.chats.isEmpty {
+            let sourceNames = Set(result.chats.map(\.source.displayName)).sorted().joined(separator: " și ")
+            parts.append("\(result.chats.count) conversații din \(sourceNames)")
+        }
+        if !result.projects.isEmpty { parts.append("\(result.projects.count) proiecte Claude") }
+        if !result.memoryText.isEmpty { parts.append("memoria din Claude (adăugată în Memorie)") }
+        statusText = "Am importat " + parts.joined(separator: ", ") + "."
+    }
+
+    /// "conversations-000.zip", or the browser's "conversations-000 (1).zip" when the name was taken.
+    private nonisolated static func downloadedFile(named filename: String, in folder: URL, since date: Date) -> URL? {
+        let base = (filename as NSString).deletingPathExtension
+        let fileExtension = (filename as NSString).pathExtension
+        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return entries
+            .filter { entry in
+                let name = entry.lastPathComponent
+                return (name == filename || (name.hasPrefix(base + " (") && name.hasSuffix(")." + fileExtension)))
+            }
+            .compactMap { entry -> (URL, Date)? in
+                guard let modified = try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                      modified >= date else { return nil }
+                return (entry, modified)
+            }
+            .max { $0.1 < $1.1 }?.0
+    }
+
+    private nonisolated static func isFinishedDownloading(_ url: URL) async -> Bool {
+        func size() -> Int { ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int) ?? 0 }
+        let first = size()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        return first > 0 && first == size()
     }
 
     func removeAll(from source: ChatArchiveKit.Source) async {
@@ -111,18 +208,16 @@ final class ChatArchiveStore: ObservableObject {
 
     // MARK: Files
 
-    private nonisolated static func readExport(at url: URL) throws -> (chats: [ChatArchiveKit.Chat], projects: [ChatArchiveKit.Project]) {
+    private nonisolated static func readExport(at url: URL) throws -> ExportContents {
         let fileManager = FileManager.default
         var folder = url
         var temporaryFolder: URL?
         defer { if let temporaryFolder { try? fileManager.removeItem(at: temporaryFolder) } }
 
         if url.pathExtension.lowercased() == "json" {
-            let data = try Data(contentsOf: url)
-            if url.lastPathComponent.lowercased().hasPrefix("projects") {
-                return ([], try ChatArchiveKit.parseClaudeProjects(data))
-            }
-            return (try ChatArchiveKit.parseConversations(data), [])
+            var contents = ExportContents()
+            read(fileAt: url, category: category(of: url), into: &contents)
+            return contents
         }
         if url.pathExtension.lowercased() == "zip" {
             let destination = fileManager.temporaryDirectory.appendingPathComponent("macky-export-\(UUID().uuidString)", isDirectory: true)
@@ -136,19 +231,75 @@ final class ChatArchiveStore: ObservableObject {
             folder = destination
         }
 
-        var chats: [ChatArchiveKit.Chat] = []
-        var projects: [ChatArchiveKit.Project] = []
+        // The archive's own name tells what is inside (conversations-000.zip, projects-000.zip, memories-000.zip).
+        let archiveCategory = category(of: url)
+        var contents = ExportContents()
         let enumerator = fileManager.enumerator(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
         while let fileURL = enumerator?.nextObject() as? URL {
-            let name = fileURL.lastPathComponent.lowercased()
-            // ChatGPT splits big exports into conversations-000.json, conversations-001.json…
-            if name.hasPrefix("conversations") && name.hasSuffix(".json") {
-                chats += (try? ChatArchiveKit.parseConversations(Data(contentsOf: fileURL))) ?? []
-            } else if name == "projects.json" {
-                projects += (try? ChatArchiveKit.parseClaudeProjects(Data(contentsOf: fileURL))) ?? []
+            let fileExtension = fileURL.pathExtension.lowercased()
+            if fileExtension == "zip" {
+                // An export downloaded as one archive with the category archives inside.
+                if let inner = try? readExport(at: fileURL) {
+                    contents.chats += inner.chats
+                    contents.projects += inner.projects
+                    contents.memoryText += inner.memoryText
+                }
+                continue
             }
+            guard ["json", "md", "txt"].contains(fileExtension) else { continue }
+            read(fileAt: fileURL, category: category(of: fileURL) ?? archiveCategory, into: &contents)
         }
-        return (chats, projects)
+        return contents
+    }
+
+    private nonisolated static func category(of url: URL) -> String? {
+        let path = url.path.lowercased()
+        for category in ["conversations", "projects", "memories"] where url.lastPathComponent.lowercased().hasPrefix(category) {
+            return category
+        }
+        if path.contains("/conversations") { return "conversations" }
+        if path.contains("/projects") { return "projects" }
+        if path.contains("/memories") || path.contains("/memory") { return "memories" }
+        return nil
+    }
+
+    private nonisolated static func read(fileAt fileURL: URL, category: String?, into contents: inout ExportContents) {
+        let name = fileURL.lastPathComponent.lowercased()
+        // Skip what the export also contains but Macky has no use for.
+        if name.hasPrefix("users") || name.hasPrefix("light_metadata") || name.hasPrefix("frames") || name.hasPrefix("design_chats") { return }
+        let fileExtension = fileURL.pathExtension.lowercased()
+        if category == "memories" {
+            if fileExtension == "json", let data = try? Data(contentsOf: fileURL), let object = try? JSONSerialization.jsonObject(with: data) {
+                contents.memoryText += memoryStrings(in: object).joined(separator: "\n")
+            } else if let text = try? String(contentsOf: fileURL, encoding: .utf8) {
+                contents.memoryText += text
+            }
+            return
+        }
+        guard fileExtension == "json", let data = try? Data(contentsOf: fileURL) else { return }
+        if category == "projects" {
+            contents.projects += (try? ChatArchiveKit.parseClaudeProjects(data)) ?? []
+            return
+        }
+        if let chats = try? ChatArchiveKit.parseConversations(data), !chats.isEmpty {
+            contents.chats += chats
+        } else if category == nil, name.hasPrefix("projects") {
+            contents.projects += (try? ChatArchiveKit.parseClaudeProjects(data)) ?? []
+        }
+    }
+
+    /// The readable text of a memory export, whatever its exact shape.
+    private nonisolated static func memoryStrings(in object: Any) -> [String] {
+        if let string = object as? String {
+            return string.count >= 20 ? [string] : []
+        }
+        if let array = object as? [Any] { return array.flatMap(memoryStrings) }
+        if let dictionary = object as? [String: Any] {
+            let preferredKeys = ["content", "memory", "text", "summary", "conversations_memory", "project_memories"]
+            let preferred = preferredKeys.compactMap { dictionary[$0] }.flatMap(memoryStrings)
+            return preferred.isEmpty ? dictionary.values.flatMap(memoryStrings) : preferred
+        }
+        return []
     }
 
     private func load() async {

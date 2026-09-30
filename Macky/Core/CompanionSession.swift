@@ -122,6 +122,9 @@ final class CompanionSession: ObservableObject {
         self.notesController = NotesController(executor: screenActionExecutor)
         self.windowArranger = WindowArranger(executor: screenActionExecutor)
         self.whatsAppController = WhatsAppController(settings: settings, executor: screenActionExecutor)
+        chatArchiveStore.onClaudeMemory = { [weak memoryManager] text in
+            memoryManager?.importClaudeMemory(text)
+        }
         self.backgroundAgentManager = BackgroundAgentManager(
             settings: settings,
             apiKeyStore: apiKeyStore,

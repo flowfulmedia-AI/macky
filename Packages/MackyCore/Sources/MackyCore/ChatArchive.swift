@@ -76,51 +76,98 @@ public enum ChatArchiveKit {
     // MARK: Parsing
 
     /// Reads a `conversations.json` from either service; the format is recognized from its content.
+    /// Accepts a list of chats, an object wrapping the list, or a single chat per file.
     public static func parseConversations(_ data: Data) throws -> [Chat] {
-        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw ParseError.notAnExport }
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { throw ParseError.notAnExport }
+        let list: [[String: Any]]
+        if let array = object as? [[String: Any]] {
+            list = array
+        } else if let dictionary = object as? [String: Any] {
+            if let wrapped = (dictionary["conversations"] ?? dictionary["chats"] ?? dictionary["data"]) as? [[String: Any]] {
+                list = wrapped
+            } else {
+                list = [dictionary]
+            }
+        } else {
+            throw ParseError.notAnExport
+        }
         if list.isEmpty { return [] }
         if list.contains(where: { $0["mapping"] != nil }) { return list.compactMap(chatGPTChat) }
-        if list.contains(where: { $0["chat_messages"] != nil }) { return list.compactMap(claudeChat) }
+        if list.contains(where: { $0["chat_messages"] != nil || $0["messages"] != nil }) { return list.compactMap(claudeChat) }
         throw ParseError.notAnExport
     }
 
-    /// Reads Claude's `projects.json`.
+    /// Reads Claude's `projects.json` (a list, a wrapped list, or one project per file).
     public static func parseClaudeProjects(_ data: Data) throws -> [Project] {
-        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw ParseError.notAnExport }
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { throw ParseError.notAnExport }
+        let list: [[String: Any]]
+        if let array = object as? [[String: Any]] {
+            list = array
+        } else if let dictionary = object as? [String: Any] {
+            list = (dictionary["projects"] as? [[String: Any]]) ?? [dictionary]
+        } else {
+            throw ParseError.notAnExport
+        }
         return list.compactMap { entry in
             guard let name = nonEmpty(entry["name"]) else { return nil }
-            let documents = (entry["docs"] as? [[String: Any]] ?? []).compactMap { document -> Project.Document? in
-                guard let text = nonEmpty(document["content"]) else { return nil }
-                return Project.Document(name: nonEmpty(document["filename"]) ?? "document", text: text)
+            let documents = ((entry["docs"] ?? entry["documents"] ?? entry["files"]) as? [[String: Any]] ?? []).compactMap { document -> Project.Document? in
+                guard let text = nonEmpty(document["content"]) ?? nonEmpty(document["text"]) else { return nil }
+                return Project.Document(name: nonEmpty(document["filename"]) ?? nonEmpty(document["name"]) ?? "document", text: text)
             }
             return Project(
-                id: nonEmpty(entry["uuid"]) ?? name,
+                id: nonEmpty(entry["uuid"]) ?? nonEmpty(entry["id"]) ?? name,
                 name: name,
                 summary: nonEmpty(entry["description"]) ?? "",
-                instructions: nonEmpty(entry["prompt_template"]) ?? "",
+                instructions: nonEmpty(entry["prompt_template"]) ?? nonEmpty(entry["instructions"]) ?? "",
                 documents: documents
             )
         }
     }
 
     static func claudeChat(_ entry: [String: Any]) -> Chat? {
-        guard let identifier = nonEmpty(entry["uuid"]) else { return nil }
-        let messages = (entry["chat_messages"] as? [[String: Any]] ?? []).compactMap { message -> Message? in
+        guard let identifier = nonEmpty(entry["uuid"]) ?? nonEmpty(entry["id"]) else { return nil }
+        let rawMessages = (entry["chat_messages"] ?? entry["messages"]) as? [[String: Any]] ?? []
+        let messages = rawMessages.compactMap { message -> Message? in
             var text = nonEmpty(message["text"]) ?? ""
             if text.isEmpty {
-                text = (message["content"] as? [[String: Any]] ?? [])
-                    .filter { ($0["type"] as? String) == "text" }
-                    .compactMap { nonEmpty($0["text"]) }
-                    .joined(separator: "\n")
+                if let content = nonEmpty(message["content"]) {
+                    text = content
+                } else {
+                    text = (message["content"] as? [[String: Any]] ?? [])
+                        .filter { ($0["type"] as? String ?? "text") == "text" }
+                        .compactMap { nonEmpty($0["text"]) }
+                        .joined(separator: "\n")
+                }
             }
             guard !text.isEmpty else { return nil }
-            return Message(isFromUser: (message["sender"] as? String) == "human", text: text)
+            let sender = (message["sender"] as? String) ?? (message["role"] as? String) ?? ""
+            return Message(isFromUser: sender == "human" || sender == "user", text: text)
         }
         guard !messages.isEmpty else { return nil }
-        let title = nonEmpty(entry["name"]) ?? String(messages[0].text.prefix(60))
+        let title = nonEmpty(entry["name"]) ?? nonEmpty(entry["title"]) ?? String(messages[0].text.prefix(60))
         return Chat(id: "claude-" + identifier, source: .claude, title: title,
                     date: isoDate(entry["updated_at"]) ?? isoDate(entry["created_at"]), messages: messages)
     }
+
+    /// The newer Claude export is a small manifest listing one .zip per category, each downloadable once
+    /// from claude.ai while logged in.
+    public struct ExportManifestFile: Equatable, Sendable {
+        public var url: URL
+        public var filename: String
+        public var category: String
+    }
+
+    public static func parseExportManifest(_ data: Data) -> [ExportManifestFile]? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = object["data_files"] as? [[String: Any]] else { return nil }
+        return files.compactMap { file in
+            guard let link = nonEmpty(file["export_url"]), let url = URL(string: link), let filename = nonEmpty(file["filename"]) else { return nil }
+            return ExportManifestFile(url: url, filename: filename, category: nonEmpty(file["category"]) ?? "")
+        }
+    }
+
+    /// Only these parts of the export hold something Macky uses.
+    public static let usefulManifestCategories: Set<String> = ["conversations", "projects", "memories"]
 
     /// ChatGPT stores a tree of messages; the conversation shown is the path from `current_node` up to the root.
     static func chatGPTChat(_ entry: [String: Any]) -> Chat? {

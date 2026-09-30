@@ -61,13 +61,31 @@ public struct FrontmostApplicationContext: Equatable, Sendable {
 
 public enum MackyPrompt {
     public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false, memoryEnabled: Bool = false,
-                                    informationToolsEnabled: Bool = false, skillsSection: String? = nil) -> String {
+                                    informationToolsEnabled: Bool = false, skillsSection: String? = nil,
+                                    connectedAppsSection: String? = nil) -> String {
         basePrompt(language: language, pointingMode: pointingMode)
             + (actionsEnabled ? actionInstructions : "")
             + (memoryEnabled ? memoryInstructions : "")
             + (informationToolsEnabled ? informationInstructions : "")
             + (actionsEnabled ? writingInstructions : "")
             + (skillsSection ?? "")
+            + (connectedAppsSection ?? "")
+    }
+
+    /// Describes the user's connected apps (MCP servers) and the user's own instructions for each.
+    public static func connectedAppsSection(apps: [(name: String, instructions: String)]) -> String? {
+        guard !apps.isEmpty else { return nil }
+        var lines = ["""
+
+
+        The user's connected apps (their tools are named mcp_<app>__<tool>). Use them directly to read and change data in these apps; \
+        do not open the app on screen for it. List or search first when you need an item's id. After a change, confirm in a few words:
+        """]
+        for app in apps {
+            let instructions = app.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            lines.append("- \(app.name)" + (instructions.isEmpty ? "" : ": \(instructions)"))
+        }
+        return lines.joined(separator: "\n")
     }
 
     static let informationInstructions = """

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @ObservedObject var skillLibrary: SkillLibrary
     @ObservedObject var googleAccountManager: GoogleAccountManager
     @ObservedObject var routineStore: RoutineStore
+    @ObservedObject var mcpConnectionStore: MCPConnectionStore
 
     var body: some View {
         TabView {
@@ -24,7 +25,7 @@ struct SettingsView: View {
                 .tabItem { Label("Voce", systemImage: "waveform") }
             RoutinesSettingsTab(routineStore: routineStore, session: session)
                 .tabItem { Label("Rutine", systemImage: "calendar.badge.clock") }
-            ConnectionsSettingsTab(googleAccountManager: googleAccountManager)
+            ConnectionsSettingsTab(googleAccountManager: googleAccountManager, mcpConnectionStore: mcpConnectionStore)
                 .tabItem { Label("Conexiuni", systemImage: "link") }
             SkillsSettingsTab(settings: settings, skillLibrary: skillLibrary)
                 .tabItem { Label("Skills", systemImage: "wand.and.stars") }
@@ -570,12 +571,24 @@ private struct SkillsSettingsTab: View {
 
 private struct ConnectionsSettingsTab: View {
     @ObservedObject var googleAccountManager: GoogleAccountManager
+    @ObservedObject var mcpConnectionStore: MCPConnectionStore
     @State private var clientIdentifier = ""
     @State private var clientSecret = ""
     @State private var saveError: String?
 
     var body: some View {
         Form {
+            Section("Aplicațiile tale (MCP)") {
+                Text("Macky poate citi și modifica direct date din aplicațiile tale care au un server MCP (ex. Flowts): „pune-mi un task…”, „ce taskuri am azi?”. Ștergerile cer confirmare.")
+                    .font(.caption).foregroundColor(.secondary)
+                ForEach(mcpConnectionStore.servers) { server in
+                    MCPServerRow(server: server, store: mcpConnectionStore)
+                }
+                Button {
+                    mcpConnectionStore.upsert(MCPServerConfiguration(name: "Aplicație nouă", url: "https://", instructions: ""))
+                } label: { Label("Adaugă aplicație", systemImage: "plus") }
+            }
+
             Section("Google: Gmail și Drive (doar citire)") {
                 HStack {
                     Image(systemName: googleAccountManager.isConnected ? "checkmark.circle.fill" : "circle")
@@ -800,5 +813,72 @@ private struct RoutineEditor: View {
             return
         }
         routineStore.upsert(draft)
+    }
+}
+
+private struct MCPServerRow: View {
+    let store: MCPConnectionStore
+    @State private var draft: MCPServerConfiguration
+    @State private var token = ""
+    @State private var isExpanded = false
+    @State private var errorText: String?
+
+    init(server: MCPServerConfiguration, store: MCPConnectionStore) {
+        self.store = store
+        _draft = State(initialValue: server)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Nume (ex. Flowts)", text: $draft.name)
+                TextField("Adresa serverului MCP", text: $draft.url)
+                    .font(.body.monospaced())
+                Text("Când să-l folosească (Macky citește asta)").font(.caption).foregroundColor(.secondary)
+                TextEditor(text: $draft.instructions)
+                    .frame(minHeight: 60)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                HStack {
+                    SecureField(store.hasToken(for: draft.id) ? "Token salvat (scrie altul ca să-l schimbi)" : "Token / cheie API (doar dacă serverul cere)", text: $token)
+                    TextField("Header", text: $draft.authorizationHeaderName)
+                        .frame(width: 130)
+                        .help("„Authorization” trimite „Bearer <token>”; altfel tokenul se trimite exact în header-ul ales (ex. x-api-key).")
+                }
+                HStack {
+                    Toggle("Activă", isOn: $draft.isEnabled)
+                    Spacer()
+                    Button("Șterge", role: .destructive) { store.delete(draft.id) }
+                    Button("Salvează și testează") {
+                        store.upsert(draft)
+                        do {
+                            if !token.isEmpty { try store.saveToken(token, for: draft.id) }
+                            token = ""
+                            errorText = nil
+                        } catch {
+                            errorText = error.localizedDescription
+                        }
+                        Task { await store.refreshTools(for: draft.id) }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                if let errorText {
+                    Text(errorText).font(.caption).foregroundColor(.red)
+                }
+                if let toolNames = store.toolNamesByServer[draft.id], !toolNames.isEmpty {
+                    Text("Unelte: " + toolNames.joined(separator: ", "))
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack {
+                Text(draft.name).fontWeight(.medium)
+                Spacer()
+                Text(store.statusByServer[draft.id] ?? (draft.isEnabled ? "" : "oprită"))
+                    .font(.caption)
+                    .foregroundColor((store.statusByServer[draft.id] ?? "").hasPrefix("Eroare") ? .red : .secondary)
+                    .lineLimit(1)
+            }
+        }
     }
 }

@@ -44,6 +44,7 @@ final class CompanionSession: ObservableObject {
     let skillLibrary: SkillLibrary
     let googleAccountManager: GoogleAccountManager
     let routineStore: RoutineStore
+    let mcpConnectionStore: MCPConnectionStore
     /// The routine being run, if the current request is one.
     private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
@@ -90,8 +91,9 @@ final class CompanionSession: ObservableObject {
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
          openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary,
-         googleAccountManager: GoogleAccountManager, routineStore: RoutineStore) {
+         googleAccountManager: GoogleAccountManager, routineStore: RoutineStore, mcpConnectionStore: MCPConnectionStore) {
         self.memoryManager = memoryManager
+        self.mcpConnectionStore = mcpConnectionStore
         self.routineStore = routineStore
         self.googleAccountManager = googleAccountManager
         self.skillLibrary = skillLibrary
@@ -859,13 +861,23 @@ final class CompanionSession: ObservableObject {
             }
         }
 
+        // The user's connected apps (MCP servers), e.g. Flowts for tasks and notes.
+        let connectedTools = useToolCalling ? await mcpConnectionStore.toolsForRequest() : []
+        guard isCurrent(interactionIdentifier) else { return }
+        let connectedToolDefinitions = connectedTools.map { MCPToolNaming.toolDefinition(serverName: $0.server.name, tool: $0.tool) }
+        var connectedApps: [(name: String, instructions: String)] = []
+        for entry in connectedTools where !connectedApps.contains(where: { $0.name == entry.server.name }) {
+            connectedApps.append((entry.server.name, entry.server.instructions))
+        }
+
         let systemPrompt = MackyPrompt.systemPrompt(
             language: settings.responseLanguage,
             pointingMode: useToolCalling ? .toolCall : .textTag,
             actionsEnabled: actionsEnabled,
             memoryEnabled: memoryToolsEnabled,
             informationToolsEnabled: useToolCalling,
-            skillsSection: useToolCalling ? SkillCatalog.promptSection(for: skills) : nil
+            skillsSection: useToolCalling ? SkillCatalog.promptSection(for: skills) : nil,
+            connectedAppsSection: MackyPrompt.connectedAppsSection(apps: connectedApps)
         )
         let userText = MackyPrompt.userMessageText(
             question: question,
@@ -898,6 +910,7 @@ final class CompanionSession: ObservableObject {
             let stepResult = try await streamModelStep(
                 messages: messages,
                 tools: tools,
+                extraToolDefinitions: connectedToolDefinitions,
                 modelIdentifier: modelIdentifier,
                 apiKey: apiKey,
                 coordinateConvention: coordinateConvention,
@@ -909,7 +922,7 @@ final class CompanionSession: ObservableObject {
             if !stepResult.visibleText.isEmpty { spokenAnswerParts.append(stepResult.visibleText) }
             pointedLabels += stepResult.pointingInstructions.map(\.label).filter { !$0.isEmpty }
 
-            let requestedActions = stepResult.toolCalls.compactMap { ScreenAction(toolCall: $0) }
+            let requestedActions = stepResult.toolCalls.compactMap(resolvedAction(for:))
             let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
             let onlyScreenlessOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.needsNoScreen)
             guard (actionsEnabled || onlyScreenlessOperations), !requestedActions.isEmpty else {
@@ -942,9 +955,9 @@ final class CompanionSession: ObservableObject {
                 let resultText: String
                 if userDeclined {
                     resultText = "Skipped because the user declined an earlier action."
-                } else if anyActionFailed && ScreenAction(toolCall: toolCall) != nil {
+                } else if anyActionFailed && resolvedAction(for: toolCall) != nil {
                     resultText = "Skipped because an earlier action failed."
-                } else if let action = ScreenAction(toolCall: toolCall) {
+                } else if let action = resolvedAction(for: toolCall) {
                     switch await perform(action, on: currentScreens, coordinateConvention: coordinateConvention, stepNumber: stepNumber, interactionIdentifier: interactionIdentifier) {
                     case .done(let description, let resultDetail):
                         if !action.isMemoryOperation { performedActionDescriptions.append(description) }
@@ -1072,9 +1085,15 @@ final class CompanionSession: ObservableObject {
     }
 
     /// Streams one model response: shows and speaks text as it arrives, collects tool calls.
+    /// Macky's own tools, or a connected app's.
+    private func resolvedAction(for toolCall: ChatToolCall) -> ScreenAction? {
+        ScreenAction(toolCall: toolCall) ?? mcpConnectionStore.action(for: toolCall)
+    }
+
     private func streamModelStep(
         messages: [ChatMessage],
         tools: [MackyTool],
+        extraToolDefinitions: [[String: Any]] = [],
         modelIdentifier: String,
         apiKey: String,
         coordinateConvention: CoordinateConvention,
@@ -1088,7 +1107,8 @@ final class CompanionSession: ObservableObject {
             tools: tools,
             coordinateConvention: coordinateConvention,
             disableReasoning: disableReasoning,
-            cacheSystemPrompt: OpenRouterRequestBuilder.needsExplicitPromptCaching(modelIdentifier: modelIdentifier)
+            cacheSystemPrompt: OpenRouterRequestBuilder.needsExplicitPromptCaching(modelIdentifier: modelIdentifier),
+            extraToolDefinitions: extraToolDefinitions
         )
 
         var pointTagFilter = PointTagStreamFilter()
@@ -1202,6 +1222,21 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
         case .readDriveFile(let identifier):
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readDriveFile(identifier: identifier))
+        case .externalTool(let serverName, let toolName, let argumentsJSON, let needsConfirmation):
+            // Only deleting asks first; creating and editing in the user's own app is what they asked for.
+            if needsConfirmation && settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion {
+                let answer = await actionConfirmationController.requestConfirmation(
+                    actionDescription: action.userFacingDescription, stepNumber: stepNumber, nearPoint: nil
+                )
+                guard isCurrent(interactionIdentifier) else { return .declined }
+                switch answer {
+                case .declined: return .declined
+                case .approvedForRestOfTask: areActionsApprovedForCurrentQuestion = true
+                case .approved: break
+                }
+            }
+            let result = await mcpConnectionStore.callTool(serverName: serverName, toolName: toolName, argumentsJSON: argumentsJSON)
+            return result.isError ? .failed(result.text) : .done(action.userFacingDescription, resultDetail: result.text)
         default:
             break
         }
@@ -1293,7 +1328,7 @@ final class CompanionSession: ObservableObject {
             backgroundAgentManager.start(goal: goal)
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
-             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile:
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool:
             break
         case .openFile(let path):
             let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)

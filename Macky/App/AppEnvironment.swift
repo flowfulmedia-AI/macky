@@ -20,6 +20,7 @@ final class AppEnvironment {
     let skillLibrary: SkillLibrary
     let googleAccountManager = GoogleAccountManager()
     let routineStore = RoutineStore()
+    let mcpConnectionStore = MCPConnectionStore()
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -45,7 +46,8 @@ final class AppEnvironment {
             historyStore: historyStore,
             skillLibrary: skillLibrary,
             googleAccountManager: googleAccountManager,
-            routineStore: routineStore
+            routineStore: routineStore,
+            mcpConnectionStore: mcpConnectionStore
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -84,6 +86,7 @@ final class AppEnvironment {
             companionSession?.startScheduledRoutine(routine) ?? false
         }
         routineStore.startScheduler()
+        Task { await mcpConnectionStore.refreshAll() }
 
         Task {
             await modelCatalogStore.refresh()
@@ -175,7 +178,8 @@ final class AppEnvironment {
                 openRouterClient: openRouterClient,
                 skillLibrary: skillLibrary,
                 googleAccountManager: googleAccountManager,
-                routineStore: routineStore
+                routineStore: routineStore,
+                mcpConnectionStore: mcpConnectionStore
             )
         }
     }

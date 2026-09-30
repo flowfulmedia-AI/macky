@@ -80,7 +80,8 @@ public enum OpenRouterRequestBuilder {
         disableReasoning: Bool = false,
         enableWebSearch: Bool = false,
         maximumResponseTokens: Int = 700,
-        cacheSystemPrompt: Bool = false
+        cacheSystemPrompt: Bool = false,
+        extraToolDefinitions: [[String: Any]] = []
     ) throws -> Data {
         var encodedMessages = messages.map(encodeMessage)
         if cacheSystemPrompt, let systemIndex = messages.firstIndex(where: { $0.role == .system }) {
@@ -108,8 +109,9 @@ public enum OpenRouterRequestBuilder {
             // "Thinking" before answering can add several seconds; Macky's tasks rarely need it.
             body["reasoning"] = ["enabled": false]
         }
-        if !tools.isEmpty {
-            body["tools"] = tools.map { toolDefinition(for: $0, coordinateConvention: coordinateConvention) }
+        if !tools.isEmpty || !extraToolDefinitions.isEmpty {
+            // Connected apps' (MCP) tools come after Macky's own, so the cached prefix stays the same.
+            body["tools"] = tools.map { toolDefinition(for: $0, coordinateConvention: coordinateConvention) } + extraToolDefinitions
             body["tool_choice"] = "auto"
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])

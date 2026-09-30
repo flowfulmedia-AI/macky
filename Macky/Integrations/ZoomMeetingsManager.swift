@@ -113,7 +113,7 @@ final class ZoomMeetingsManager: ObservableObject {
         timer?.invalidate()
         guard isEnabled, hasCredentials else { return }
         let timer = Timer(timeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { Task { await self?.checkForNewMeetings() } }
+            Task { @MainActor in await self?.checkForNewMeetings() }
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)

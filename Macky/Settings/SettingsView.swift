@@ -11,6 +11,7 @@ struct SettingsView: View {
     @ObservedObject var spotifyCredentialsStore: SpotifyCredentialsStore
     let openRouterClient: OpenRouterClient
     @ObservedObject var skillLibrary: SkillLibrary
+    @ObservedObject var googleAccountManager: GoogleAccountManager
 
     var body: some View {
         TabView {
@@ -20,6 +21,8 @@ struct SettingsView: View {
                 .tabItem { Label("AI", systemImage: "sparkles") }
             VoiceSettingsTab(settings: settings, session: session)
                 .tabItem { Label("Voce", systemImage: "waveform") }
+            ConnectionsSettingsTab(googleAccountManager: googleAccountManager)
+                .tabItem { Label("Conexiuni", systemImage: "link") }
             SkillsSettingsTab(settings: settings, skillLibrary: skillLibrary)
                 .tabItem { Label("Skills", systemImage: "wand.and.stars") }
             GeneralSettingsTab(settings: settings)
@@ -557,5 +560,85 @@ private struct SkillsSettingsTab: View {
             settings.skillsFolderPath = url.path
             skillLibrary.reload()
         }
+    }
+}
+
+// MARK: - Connections
+
+private struct ConnectionsSettingsTab: View {
+    @ObservedObject var googleAccountManager: GoogleAccountManager
+    @State private var clientIdentifier = ""
+    @State private var clientSecret = ""
+    @State private var saveError: String?
+
+    var body: some View {
+        Form {
+            Section("Google: Gmail și Drive (doar citire)") {
+                HStack {
+                    Image(systemName: googleAccountManager.isConnected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(googleAccountManager.isConnected ? .green : .secondary)
+                    Text(googleAccountManager.isConnected
+                         ? "Conectat" + (googleAccountManager.connectedEmailAddress.map { " ca \($0)" } ?? "")
+                         : "Neconectat")
+                    Spacer()
+                    if googleAccountManager.isConnected {
+                        Button("Deconectează") { googleAccountManager.disconnect() }
+                    } else {
+                        Button(googleAccountManager.isConnecting ? "Se conectează…" : "Conectează Google") {
+                            Task { await googleAccountManager.connect() }
+                        }
+                        .disabled(!googleAccountManager.hasClientCredentials || googleAccountManager.isConnecting)
+                    }
+                }
+                if let statusText = googleAccountManager.statusText {
+                    Text(statusText).font(.caption).foregroundColor(.secondary)
+                }
+                Text("Macky poate căuta și citi mailuri și fișiere din Drive („ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”). Nu poate trimite, șterge sau modifica nimic.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
+            Section("Clientul tău Google (o singură dată, ~10 minute)") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("1. Deschide Google Cloud Console și creează un proiect nou, de exemplu „Macky”.")
+                    Text("2. APIs & Services → Library: activează „Gmail API” și „Google Drive API”.")
+                    Text("3. Google Auth Platform (OAuth consent screen): tip External, nume Macky, emailul tău. La Audience adaugă-ți adresa de Gmail ca Test user, apoi apasă „Publish app”, ca să nu expire conectarea după 7 zile.")
+                    Text("4. Clients → Create client → tip „Desktop app” → Create. Copiază aici Client ID și Client secret.")
+                    Text("5. Apasă „Conectează Google”. Google va spune că aplicația nu e verificată (e aplicația ta): Advanced → Go to Macky → Continue.")
+                }
+                .font(.callout)
+                Button("Deschide Google Cloud Console") {
+                    NSWorkspace.shared.open(URL(string: "https://console.cloud.google.com/apis/credentials")!)
+                }
+                TextField("Client ID (…apps.googleusercontent.com)", text: $clientIdentifier)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Client secret", text: $clientSecret)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Salvează în Keychain") {
+                        do {
+                            try googleAccountManager.saveClientCredentials(clientIdentifier: clientIdentifier, clientSecret: clientSecret)
+                            clientIdentifier = ""
+                            clientSecret = ""
+                            saveError = nil
+                        } catch {
+                            saveError = error.localizedDescription
+                        }
+                    }
+                    .disabled(clientIdentifier.trimmingCharacters(in: .whitespaces).isEmpty || clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if googleAccountManager.hasClientCredentials {
+                        Label("Salvat", systemImage: "checkmark").font(.caption).foregroundColor(.green)
+                    }
+                }
+                if let saveError {
+                    Text(saveError).font(.caption).foregroundColor(.red)
+                }
+            }
+
+            Section("Fișiere de pe Mac") {
+                Text("Macky caută cu Spotlight în folderul tău (Documents, Desktop, Downloads…) și citește PDF, Word, RTF și text. Nu are nevoie de nicio setare.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 }

@@ -33,11 +33,19 @@ public enum MackyTool: String, CaseIterable, Sendable {
     // Writing assistant and Claude skills.
     case replaceSelection = "replace_selection"
     case useSkill = "use_skill"
+    // Files on the Mac, Gmail and Google Drive.
+    case searchFiles = "search_files"
+    case readFile = "read_file"
+    case openFile = "open_file"
+    case searchGmail = "search_gmail"
+    case readEmail = "read_email"
+    case searchDrive = "search_drive"
+    case readDriveFile = "read_drive_file"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
         .spotify, .systemControl, .createEvent, .listEvents, .createReminder, .listReminders, .createNote, .arrangeWindow,
-        .startBackgroundTask, .replaceSelection, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
+        .startBackgroundTask, .replaceSelection, .openFile, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
     ]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
@@ -49,7 +57,11 @@ public enum MackyTool: String, CaseIterable, Sendable {
     /// Offered whenever tools are, even when Macky may not act on the computer.
     public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
     /// Tools that only fetch information (web, skills); offered whenever tools are.
-    public static let informationTools: [MackyTool] = [.webSearch, .fetchURL, .useSkill]
+    public static let informationTools: [MackyTool] = [
+        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile
+    ]
+    /// Need a connected Google account.
+    public static let googleTools: Set<MackyTool> = [.searchGmail, .readEmail, .searchDrive, .readDriveFile]
 
     public var isAction: Bool { Self.actionTools.contains(self) }
     public var isMemoryTool: Bool { Self.memoryTools.contains(self) }
@@ -263,6 +275,43 @@ public enum OpenRouterRequestBuilder {
                 "text": ["type": "string", "description": "The complete new text, ready to use, with no comments around it."]
             ]
             required = ["text"]
+        case .searchFiles:
+            description = "Searches the files on the user's Mac by name and content (Spotlight). Returns paths, newest first. "
+                + "Use it when the user asks where a document is, or for a file to read or open."
+            properties = [
+                "query": ["type": "string", "description": "Words from the file name or content, e.g. 'contract Nordic'."],
+                "kind": ["type": "string", "enum": ["any", "document", "pdf", "spreadsheet", "presentation", "image", "folder"], "description": "Default any."]
+            ]
+            required = ["query"]
+        case .readFile:
+            description = "Reads the text of a file on the Mac (txt, md, pdf, docx, rtf, csv…), given its full path from search_files."
+            properties = ["path": ["type": "string"]]
+            required = ["path"]
+        case .openFile:
+            description = "Opens a file or folder on the Mac in its default app, given its full path."
+            properties = ["path": ["type": "string"]]
+            required = ["path"]
+        case .searchGmail:
+            description = "Searches the user's Gmail (read-only) with Gmail search syntax, e.g. 'from:andrei factura', "
+                + "'is:unread newer_than:1d', 'subject:ofertă after:2026/09/01'. Returns id, date, sender, subject and snippet for each email."
+            properties = [
+                "query": ["type": "string"],
+                "max_results": ["type": "integer", "description": "Default 10, at most 25."]
+            ]
+            required = ["query"]
+        case .readEmail:
+            description = "Reads one Gmail email in full, by the id from search_gmail."
+            properties = ["id": ["type": "string"]]
+            required = ["id"]
+        case .searchDrive:
+            description = "Searches the user's Google Drive (read-only) by file name and content. Returns id, name, type, date and link."
+            properties = ["query": ["type": "string", "description": "Words to find, e.g. 'contract Nordic'."]]
+            required = ["query"]
+        case .readDriveFile:
+            description = "Reads the text of a Google Drive file (Docs, Sheets as CSV, Slides, PDF, text) by the id from search_drive. "
+                + "To show it to the user instead, call open_url with its link."
+            properties = ["id": ["type": "string"]]
+            required = ["id"]
         case .useSkill:
             description = "Loads one of the user's Claude skills by name and returns its instructions, which you must then follow."
             properties = [

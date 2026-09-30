@@ -70,15 +70,34 @@ public enum HTMLTextExtractor {
         // Keep structure: block elements become line breaks.
         text = text.replacingOccurrences(of: "(?i)<(br|/p|/div|/li|/h[1-6]|/tr|/section|/article)\\b[^>]*>", with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-        let entities = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
-        for (entity, replacement) in entities {
-            text = text.replacingOccurrences(of: entity, with: replacement)
-        }
+        text = decodeEntities(text)
         text = text.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: " ?\\n ?", with: "\n", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.count > maximumCharacters ? String(text.prefix(maximumCharacters)) + "\n[…]" : text
+    }
+
+    /// Turns "&amp;", "&#39;", "&#x219;" and friends back into characters.
+    public static func decodeEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        var result = text
+        for (entity, replacement) in [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'")] {
+            result = result.replacingOccurrences(of: entity, with: replacement)
+        }
+        if let numericEntity = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]+);") {
+            let matches = numericEntity.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
+            for match in matches {
+                guard let wholeRange = Range(match.range, in: result),
+                      let hexRange = Range(match.range(at: 1), in: result),
+                      let digitsRange = Range(match.range(at: 2), in: result) else { continue }
+                let isHex = !result[hexRange].isEmpty
+                guard let value = UInt32(result[digitsRange], radix: isHex ? 16 : 10), let scalar = Unicode.Scalar(value) else { continue }
+                result.replaceSubrange(wholeRange, with: String(Character(scalar)))
+            }
+        }
+        // Last, so "&amp;lt;" stays "&lt;".
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 
     /// Safe file name for save_file: no folders, no hidden files, Markdown by default.

@@ -42,6 +42,13 @@ public enum ScreenAction: Equatable, Sendable {
     case useSkill(name: String)
     case webSearch(query: String)
     case fetchURL(String)
+    case searchFiles(query: String, kind: String)
+    case readFile(path: String)
+    case openFile(path: String)
+    case searchGmail(query: String, maximumResults: Int)
+    case readEmail(identifier: String)
+    case searchDrive(query: String)
+    case readDriveFile(identifier: String)
 
     /// Parses an action tool call. Returns nil for `point_at` or malformed arguments.
     public init?(toolCall: ChatToolCall) {
@@ -130,6 +137,27 @@ public enum ScreenAction: Equatable, Sendable {
         case .fetchURL:
             guard let url = Self.nonEmptyString(arguments["url"]) else { return nil }
             self = .fetchURL(url)
+        case .searchFiles:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .searchFiles(query: query, kind: Self.nonEmptyString(arguments["kind"])?.lowercased() ?? "any")
+        case .readFile:
+            guard let path = Self.nonEmptyString(arguments["path"]) else { return nil }
+            self = .readFile(path: path)
+        case .openFile:
+            guard let path = Self.nonEmptyString(arguments["path"]) else { return nil }
+            self = .openFile(path: path)
+        case .searchGmail:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .searchGmail(query: query, maximumResults: min(max(OpenRouterStreamDecoder.integerValue(arguments["max_results"]) ?? 10, 1), 25))
+        case .readEmail:
+            guard let identifier = Self.nonEmptyString(arguments["id"]) else { return nil }
+            self = .readEmail(identifier: identifier)
+        case .searchDrive:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .searchDrive(query: query)
+        case .readDriveFile:
+            guard let identifier = Self.nonEmptyString(arguments["id"]) else { return nil }
+            self = .readDriveFile(identifier: identifier)
         case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
@@ -190,13 +218,28 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută pe web: \(query)"
         case .fetchURL(let url):
             return "Citește \(url.count > 60 ? String(url.prefix(60)) + "…" : url)"
+        case .searchFiles(let query, _):
+            return "Caută fișiere: \(query)"
+        case .readFile(let path):
+            return "Citește \((path as NSString).lastPathComponent)"
+        case .openFile(let path):
+            return "Deschide \((path as NSString).lastPathComponent)"
+        case .searchGmail(let query, _):
+            return "Caută în Gmail: \(query)"
+        case .readEmail:
+            return "Citește un email"
+        case .searchDrive(let query):
+            return "Caută în Google Drive: \(query)"
+        case .readDriveFile:
+            return "Citește un fișier din Drive"
         }
     }
 
     /// Actions that only read, never change anything, so they need no confirmation.
     public var isReadOnly: Bool {
         switch self {
-        case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL: return true
+        case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL,
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile: return true
         default: return false
         }
     }
@@ -212,7 +255,8 @@ public enum ScreenAction: Equatable, Sendable {
     /// Works without the screen: memory, web and skills. No new screenshot is needed after these.
     public var needsNoScreen: Bool {
         switch self {
-        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL: return true
+        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile: return true
         default: return false
         }
     }
@@ -220,7 +264,8 @@ public enum ScreenAction: Equatable, Sendable {
     /// Returns information the model has to read before it can answer.
     public var returnsInformation: Bool {
         switch self {
-        case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders: return true
+        case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders,
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile: return true
         default: return false
         }
     }

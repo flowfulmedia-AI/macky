@@ -42,6 +42,8 @@ final class CompanionSession: ObservableObject {
     let memoryManager: MemoryManager
     let historyStore: HistoryStore
     let skillLibrary: SkillLibrary
+    let googleAccountManager: GoogleAccountManager
+    private let localFileSearch = LocalFileSearch()
     /// Set while Macky listens for a reply after answering, without the keys (see `startFollowUpListening`).
     private var followUpListeningIdentifier: UUID?
     private var followUpWindow: Double = FollowUpListeningPolicy.defaultWindow
@@ -84,8 +86,10 @@ final class CompanionSession: ObservableObject {
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
-         openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary) {
+         openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary,
+         googleAccountManager: GoogleAccountManager) {
         self.memoryManager = memoryManager
+        self.googleAccountManager = googleAccountManager
         self.skillLibrary = skillLibrary
         self.historyStore = historyStore
         self.settings = settings
@@ -804,7 +808,11 @@ final class CompanionSession: ObservableObject {
         skillLibrary.reloadIfChanged()
         let skills = skillLibrary.skills
         if useToolCalling {
-            tools += MackyTool.informationTools.filter { $0 != .useSkill || !skills.isEmpty }
+            tools += MackyTool.informationTools.filter { tool in
+                if tool == .useSkill { return !skills.isEmpty }
+                if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
+                return true
+            }
         }
 
         let systemPrompt = MackyPrompt.systemPrompt(
@@ -1131,6 +1139,20 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: result.text)
         case .fetchURL(let address):
             return .done(action.userFacingDescription, resultDetail: await backgroundAgentManager.webResearchService.readableText(from: address, maximumCharacters: 8000))
+        case .searchFiles(let query, let kind):
+            return .done(action.userFacingDescription, resultDetail: await localFileSearch.search(query, kind: kind))
+        case .readFile(let path):
+            return .done(action.userFacingDescription, resultDetail: FileTextReader.readLocalFile(atPath: path))
+        case .searchGmail(let query, let maximumResults):
+            overlayController.setBubbleText("Caut în Gmail…")
+            return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchGmail(query: query, maximumResults: maximumResults))
+        case .readEmail(let identifier):
+            return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readEmail(identifier: identifier))
+        case .searchDrive(let query):
+            overlayController.setBubbleText("Caut în Google Drive…")
+            return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
+        case .readDriveFile(let identifier):
+            return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readDriveFile(identifier: identifier))
         default:
             break
         }
@@ -1221,8 +1243,14 @@ final class CompanionSession: ObservableObject {
         case .startBackgroundTask(let goal):
             backgroundAgentManager.start(goal: goal)
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
-        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL:
+        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile:
             break
+        case .openFile(let path):
+            let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: fileURL.path), NSWorkspace.shared.open(fileURL) else {
+                return .failed("Could not open \(path).")
+            }
         case .replaceSelection(let text):
             dictationTextInserter.insert(text)
             try? await Task.sleep(nanoseconds: 300_000_000)

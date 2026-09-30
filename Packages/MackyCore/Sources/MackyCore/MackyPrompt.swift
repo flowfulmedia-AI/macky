@@ -75,6 +75,13 @@ public enum MackyPrompt {
 
         Web:
         - For current facts (news, prices, schedules, weather, anything that changes or that you are not sure about), call web_search, then answer briefly in speech. Mention the source only if it matters. Use fetch_url to read a specific page.
+
+        Finding things:
+        - Files on the Mac: search_files, then read_file to read one or open_file to show it.
+        - Email: search_gmail (Gmail search syntax), then read_email for the full text. The user uses Gmail, never Apple Mail.
+        - Google Drive: search_drive, then read_drive_file, or open_url with its link to show it.
+        - If memory says where something is, look there first. After finding something the user will need again, remember where it is.
+        - Summarize what you found in one or two spoken sentences; do not read long documents aloud.
         """
 
     static let writingInstructions = """

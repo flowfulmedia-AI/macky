@@ -18,6 +18,7 @@ final class AppEnvironment {
     let memoryManager: MemoryManager
     let historyStore: HistoryStore
     let skillLibrary: SkillLibrary
+    let googleAccountManager = GoogleAccountManager()
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -41,7 +42,8 @@ final class AppEnvironment {
             openRouterClient: openRouterClient,
             memoryManager: memoryManager,
             historyStore: historyStore,
-            skillLibrary: skillLibrary
+            skillLibrary: skillLibrary,
+            googleAccountManager: googleAccountManager
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -165,7 +167,8 @@ final class AppEnvironment {
                 session: companionSession,
                 spotifyCredentialsStore: spotifyCredentialsStore,
                 openRouterClient: openRouterClient,
-                skillLibrary: skillLibrary
+                skillLibrary: skillLibrary,
+                googleAccountManager: googleAccountManager
             )
         }
     }

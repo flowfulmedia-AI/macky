@@ -44,6 +44,10 @@ struct HomeView: View {
     @ObservedObject var routineStore: RoutineStore
     let suggestions: [SuggestionCatalog.Suggestion]
     let openSettings: () -> Void
+    /// The smaller version shown under the notch.
+    var compact = false
+    /// Replaces the Home section (the notch uses its quick-question panel there).
+    var homeContent: AnyView?
 
     @State private var selection: Section = .home
 
@@ -53,24 +57,26 @@ struct HomeView: View {
             Divider().overlay(MackyDesign.hairline)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(MackyDesign.windowBackground)
+                .background(compact ? Color.clear : MackyDesign.windowBackground)
         }
-        .background(MackyDesign.windowBackground)
+        .background(compact ? Color.clear : MackyDesign.windowBackground)
         .environment(\.colorScheme, .dark)
-        .frame(minWidth: 900, minHeight: 620)
+        .frame(minWidth: compact ? nil : 900, minHeight: compact ? nil : 620)
     }
 
     // MARK: Sidebar
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                MackyMascotView(mood: .happy, size: 30)
-                Text("Macky").font(MackyDesign.rounded(20, .bold)).foregroundColor(MackyDesign.textPrimary)
+            if !compact {
+                HStack(spacing: 8) {
+                    MackyMascotView(mood: .happy, size: 30)
+                    Text("Macky").font(MackyDesign.rounded(20, .bold)).foregroundColor(MackyDesign.textPrimary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 18)
+                .padding(.bottom, 12)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 2) {
@@ -89,20 +95,22 @@ struct HomeView: View {
                     .buttonStyle(MackyIconButtonStyle())
                     .help("Setări")
             }
-            .padding(14)
+            .padding(compact ? 10 : 14)
         }
-        .frame(width: 270)
-        .background(MackyDesign.sidebarBackground)
+        .padding(.top, compact ? 8 : 0)
+        .frame(width: compact ? 214 : 270)
+        .background(compact ? MackyDesign.surface.opacity(0.5) : MackyDesign.sidebarBackground)
+        .clipShape(RoundedRectangle(cornerRadius: compact ? 18 : 0, style: .continuous))
     }
 
     private func sidebarRow(_ section: Section) -> some View {
         let isSelected = selection == section
         return Button { selection = section } label: {
-            HStack(spacing: 12) {
-                MackyMascotView(mood: section == .home ? mascotMood : .idle, size: 40, colors: section.palette)
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: compact ? 9 : 12) {
+                MackyMascotView(mood: section == .home ? mascotMood : .idle, size: compact ? 30 : 40, colors: section.palette)
+                VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                     HStack {
-                        Text(section.title).font(MackyDesign.rounded(15, .bold)).foregroundColor(MackyDesign.textPrimary)
+                        Text(section.title).font(MackyDesign.rounded(compact ? 13 : 15, .bold)).foregroundColor(MackyDesign.textPrimary)
                         Spacer()
                         if let badge = badge(for: section) {
                             Text(badge)
@@ -111,13 +119,13 @@ struct HomeView: View {
                         }
                     }
                     Text(subtitle(for: section))
-                        .font(MackyDesign.rounded(12))
+                        .font(MackyDesign.rounded(compact ? 11 : 12))
                         .foregroundColor(MackyDesign.textSecondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, compact ? 8 : 10)
+            .padding(.vertical, compact ? 6 : 8)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(isSelected ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.36, green: 0.42, blue: 0.85).opacity(0.55), Color(red: 0.30, green: 0.34, blue: 0.70).opacity(0.35)], startPoint: .topLeading, endPoint: .bottomTrailing)) : AnyShapeStyle(Color.clear))
@@ -126,7 +134,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, compact ? 4 : 8)
         .pointingHandOnHover()
     }
 
@@ -178,7 +186,11 @@ struct HomeView: View {
     private var content: some View {
         switch selection {
         case .home:
-            HomeSectionView(session: session, settings: settings, suggestions: suggestions, mood: mascotMood)
+            if let homeContent {
+                homeContent.padding(.leading, 10)
+            } else {
+                HomeSectionView(session: session, settings: settings, suggestions: suggestions, mood: mascotMood)
+            }
         case .agents:
             AgentsSectionView(agentManager: agentManager)
         case .meetings:

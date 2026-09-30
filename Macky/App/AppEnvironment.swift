@@ -117,8 +117,10 @@ final class AppEnvironment {
         companionSession.stopEverything()
     }
 
+    /// The notch (or menu bar) panel: a sidebar of Macky's sections, with the quick-question panel as the first one.
     private func makePanelContent() -> AnyView {
-        AnyView(CompanionPanelView(
+        let suggestions = currentSuggestions()
+        let quickPanel = CompanionPanelView(
             session: companionSession,
             settings: settings,
             permissions: permissions,
@@ -126,12 +128,26 @@ final class AppEnvironment {
             modelCatalogStore: modelCatalogStore,
             agentManager: companionSession.backgroundAgentManager,
             usageStore: usageStore,
-            suggestions: currentSuggestions(),
+            suggestions: suggestions,
             openHome: { [unowned self] in self.openHome() },
             openSettings: { [unowned self] in self.openSettings() },
             openCalibration: { [unowned self] in self.openCalibration() },
             openMemory: { [unowned self] in self.openMemory() },
             openHistory: { [unowned self] in self.openHistory() }
+        )
+        return AnyView(HomeView(
+            session: companionSession,
+            settings: settings,
+            usageStore: usageStore,
+            agentManager: companionSession.backgroundAgentManager,
+            zoomMeetingsManager: zoomMeetingsManager,
+            memoryManager: memoryManager,
+            historyStore: historyStore,
+            routineStore: routineStore,
+            suggestions: suggestions,
+            openSettings: { [unowned self] in self.openSettings() },
+            compact: true,
+            homeContent: AnyView(quickPanel)
         ))
     }
 

@@ -2,7 +2,7 @@ import Foundation
 import MackyCore
 
 /// Talks to OpenRouter directly from the app. There is no proxy server: Macky is a personal
-/// app, so the only user is the owner of the API key, which lives in the macOS Keychain.
+/// app, so the only user is the owner of the API key, which stays on the Mac (see KeychainStore).
 final class OpenRouterClient: @unchecked Sendable {
     static let baseURL = URL(string: "https://openrouter.ai/api/v1")!
 

@@ -937,7 +937,7 @@ final class CompanionSession: ObservableObject {
         }
 
         // The user's connected apps (MCP servers), e.g. Flowts for tasks and notes.
-        let connectedTools = useToolCalling ? await mcpConnectionStore.toolsForRequest() : []
+        let connectedTools = useToolCalling ? await mcpConnectionStore.toolsForRequest(question) : []
         guard isCurrent(interactionIdentifier) else { return }
         let connectedToolDefinitions = connectedTools.map { MCPToolNaming.toolDefinition(serverName: $0.server.name, tool: $0.tool) }
         var connectedApps: [(name: String, instructions: String)] = []

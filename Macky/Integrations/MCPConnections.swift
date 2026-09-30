@@ -11,6 +11,52 @@ struct MCPServerConfiguration: Codable, Identifiable, Equatable {
     var instructions: String
     /// Header that carries the token, when the server needs one ("Authorization" sends "Bearer <token>").
     var authorizationHeaderName = "Authorization"
+    /// When not empty, the app's tools are offered only for requests containing one of these words.
+    /// Apps with many tools (like Canva) would otherwise make every request bigger and pricier.
+    var activationKeywords: [String] = []
+
+    init(id: UUID = UUID(), name: String, url: String, isEnabled: Bool = true, instructions: String,
+         authorizationHeaderName: String = "Authorization", activationKeywords: [String] = []) {
+        self.id = id
+        self.name = name
+        self.url = url
+        self.isEnabled = isEnabled
+        self.instructions = instructions
+        self.authorizationHeaderName = authorizationHeaderName
+        self.activationKeywords = activationKeywords
+    }
+
+    /// Tolerates settings saved by older versions, which lack newer fields.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        url = try container.decode(String.self, forKey: .url)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        instructions = try container.decodeIfPresent(String.self, forKey: .instructions) ?? ""
+        authorizationHeaderName = try container.decodeIfPresent(String.self, forKey: .authorizationHeaderName) ?? "Authorization"
+        activationKeywords = try container.decodeIfPresent([String].self, forKey: .activationKeywords) ?? []
+    }
+
+    /// Whether this request should get the app's tools.
+    func isRelevant(to request: String?) -> Bool {
+        guard !activationKeywords.isEmpty, let request else { return true }
+        let folded = request.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        return activationKeywords.contains { keyword in
+            let foldedKeyword = keyword.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .trimmingCharacters(in: .whitespaces)
+            return !foldedKeyword.isEmpty && folded.contains(foldedKeyword)
+        }
+    }
+
+    static let canvaPreset = MCPServerConfiguration(
+        name: "Canva",
+        url: "https://mcp.canva.com/mcp",
+        instructions: "Contul meu Canva. Folosește-l când îți cer un design (postare, banner, prezentare, flyer, logo, thumbnail): "
+            + "generează variante, alege sau lasă-mă să aleg, creează designul și dă-mi linkul să-l deschid.",
+        activationKeywords: ["canva", "design", "banner", "postare", "postări", "poster", "prezentare", "slide", "flyer", "logo",
+                             "thumbnail", "story", "carusel", "vizual", "grafică", "grafica"]
+    )
 }
 
 /// Talks to one MCP server with the Streamable HTTP transport: initialize once, then tools/list and tools/call.
@@ -144,6 +190,7 @@ final class MCPConnectionStore: ObservableObject {
     @Published private(set) var signingInServers: Set<UUID> = []
     private var signInAttempts: [UUID: UUID] = [:]
     private var authorizers: [UUID: MCPOAuthAuthorizer] = [:]
+    private var lastUseDateByServer: [UUID: Date] = [:]
 
     private var clients: [UUID: MCPClient] = [:]
     private var refreshingServers: Set<UUID> = []
@@ -286,9 +333,9 @@ final class MCPConnectionStore: ObservableObject {
 
     /// Tools for the next model request. Uses what is already loaded; loads (briefly waiting) only the first time,
     /// and refreshes stale lists in the background so a request is never slowed down by it.
-    func toolsForRequest() async -> [(server: MCPServerConfiguration, tool: MCPToolDescriptor)] {
+    func toolsForRequest(_ request: String? = nil) async -> [(server: MCPServerConfiguration, tool: MCPToolDescriptor)] {
         var result: [(MCPServerConfiguration, MCPToolDescriptor)] = []
-        for server in servers where server.isEnabled {
+        for server in servers where server.isEnabled && (server.isRelevant(to: request) || wasUsedRecently(server)) {
             let client = client(for: server)
             if client.toolsLoadedAt == nil {
                 // Wait at most 4 s; a slow server just misses this request and is ready for the next.
@@ -321,10 +368,26 @@ final class MCPConnectionStore: ObservableObject {
         guard let server = servers.first(where: { $0.name == serverName && $0.isEnabled }) else {
             return ("\(serverName) is not connected.", true)
         }
+        lastUseDateByServer[server.id] = Date()
         do {
             return try await client(for: server).callTool(named: toolName, argumentsJSON: argumentsJSON)
         } catch {
             return (error.localizedDescription, true)
         }
+    }
+
+    /// An app used in the last 10 minutes stays available for follow-ups ("fă-l mai albastru").
+    private func wasUsedRecently(_ server: MCPServerConfiguration) -> Bool {
+        guard let lastUseDate = lastUseDateByServer[server.id] else { return false }
+        return Date().timeIntervalSince(lastUseDate) < 10 * 60
+    }
+
+    /// Adds Canva (its official MCP server); the user then signs in with "Conectează (login)".
+    func addCanva() -> UUID {
+        if let existing = servers.first(where: { $0.url == MCPServerConfiguration.canvaPreset.url }) { return existing.id }
+        var canva = MCPServerConfiguration.canvaPreset
+        canva.id = UUID()
+        upsert(canva)
+        return canva.id
     }
 }

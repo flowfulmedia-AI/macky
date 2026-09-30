@@ -47,7 +47,7 @@ struct HistoryView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
-        .frame(minWidth: 620, minHeight: 480)
+        .frame(minWidth: 480, minHeight: 400)
         .confirmationDialog("Ștergi tot istoricul?", isPresented: $isConfirmingDeletion) {
             Button("Șterge", role: .destructive) { historyStore.deleteAll() }
         }

@@ -362,7 +362,7 @@ struct OnboardingChecklistView: View {
             checklistRow(
                 isDone: apiKeyStore.hasAPIKey,
                 title: "Cheia OpenRouter",
-                explanation: "Se păstrează în Keychain, doar pe Mac-ul tău.",
+                explanation: "Se păstrează doar pe Mac-ul tău, într-un fișier privat.",
                 buttonTitle: "Adaugă",
                 action: openSettings
             )

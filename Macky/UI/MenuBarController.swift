@@ -10,7 +10,7 @@ class KeyablePanel: NSPanel {
 /// Menu bar icon plus the dark floating panel that opens under it.
 @MainActor
 final class MenuBarController: NSObject {
-    private static let panelSize = NSSize(width: 430, height: 600)
+    private static let panelSize = NSSize(width: 820, height: 610)
 
     private var statusItem: NSStatusItem?
     private var panel: KeyablePanel?

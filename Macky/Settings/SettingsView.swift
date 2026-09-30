@@ -62,7 +62,7 @@ private struct OpenRouterSettingsTab: View {
         Form {
             Section("Cheia OpenRouter") {
                 HStack {
-                    SecureField(apiKeyStore.hasAPIKey ? "•••••••• (salvată în Keychain)" : "sk-or-v1-…", text: $apiKeyDraft)
+                    SecureField(apiKeyStore.hasAPIKey ? "•••••••• (salvată pe Mac)" : "sk-or-v1-…", text: $apiKeyDraft)
                         .textFieldStyle(.roundedBorder)
                     Button("Salvează") { saveAPIKey() }
                         .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -586,9 +586,19 @@ private struct ConnectionsSettingsTab: View {
                 ForEach(mcpConnectionStore.servers) { server in
                     MCPServerRow(server: server, store: mcpConnectionStore)
                 }
-                Button {
-                    mcpConnectionStore.upsert(MCPServerConfiguration(name: "Aplicație nouă", url: "https://", instructions: ""))
-                } label: { Label("Adaugă aplicație", systemImage: "plus") }
+                HStack {
+                    Button {
+                        mcpConnectionStore.upsert(MCPServerConfiguration(name: "Aplicație nouă", url: "https://", instructions: ""))
+                    } label: { Label("Adaugă aplicație", systemImage: "plus") }
+                    if !mcpConnectionStore.servers.contains(where: { $0.url == MCPServerConfiguration.canvaPreset.url }) {
+                        Button {
+                            let identifier = mcpConnectionStore.addCanva()
+                            Task { await mcpConnectionStore.signIn(identifier) }
+                        } label: { Label("Conectează Canva", systemImage: "paintpalette") }
+                    }
+                }
+                Text("Canva: după login în browser, Macky poate genera designuri („fă-mi o postare de Instagram pentru atelierul de sâmbătă”), le creează în contul tău și îți dă linkul. Uneltele Canva se încarcă doar când ceri ceva de design, ca celelalte cereri să rămână ieftine.")
+                    .font(.caption).foregroundColor(.secondary)
             }
 
             ZoomSettingsSections(manager: zoomMeetingsManager, googleConnected: googleAccountManager.isConnected)
@@ -634,7 +644,7 @@ private struct ConnectionsSettingsTab: View {
                 SecureField("Client secret", text: $clientSecret)
                     .textFieldStyle(.roundedBorder)
                 HStack {
-                    Button("Salvează în Keychain") {
+                    Button("Salvează") {
                         do {
                             try googleAccountManager.saveClientCredentials(clientIdentifier: clientIdentifier, clientSecret: clientSecret)
                             clientIdentifier = ""
@@ -826,10 +836,21 @@ private struct MCPServerRow: View {
     @State private var token = ""
     @State private var isExpanded = false
     @State private var errorText: String?
+    @State private var keywordsText: String
 
     init(server: MCPServerConfiguration, store: MCPConnectionStore) {
         _store = ObservedObject(wrappedValue: store)
         _draft = State(initialValue: server)
+        _keywordsText = State(initialValue: server.activationKeywords.joined(separator: ", "))
+    }
+
+    /// The draft with the keywords typed so far.
+    private var draftToSave: MCPServerConfiguration {
+        var server = draft
+        server.activationKeywords = keywordsText.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return server
     }
 
     var body: some View {
@@ -842,6 +863,8 @@ private struct MCPServerRow: View {
                 TextEditor(text: $draft.instructions)
                     .frame(minHeight: 60)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                TextField("Doar pentru cereri cu aceste cuvinte (opțional, separate prin virgulă)", text: $keywordsText)
+                .help("Gol = uneltele aplicației sunt mereu disponibile. Cu cuvinte = doar când cererea le conține (economisește tokens).")
                 HStack {
                     if store.isSignedIn(draft.id) {
                         Label("Conectat prin login", systemImage: "checkmark.seal.fill").foregroundColor(.green)
@@ -855,6 +878,7 @@ private struct MCPServerRow: View {
                             ProgressView().controlSize(.small)
                         }
                         Button(store.signingInServers.contains(draft.id) ? "Conectează din nou" : "Conectează (login)") {
+                            draft = draftToSave
                             store.upsert(draft)
                             Task { await store.signIn(draft.id) }
                         }
@@ -874,6 +898,7 @@ private struct MCPServerRow: View {
                         Task { await store.refreshTools(for: draft.id) }
                     }
                     Button("Salvează și testează") {
+                        draft = draftToSave
                         store.upsert(draft)
                         do {
                             if !token.isEmpty { try store.saveToken(token, for: draft.id) }
@@ -963,7 +988,7 @@ private struct ZoomSettingsSections: View {
             TextField("Client ID", text: $clientIdentifier).textFieldStyle(.roundedBorder)
             SecureField("Client Secret", text: $clientSecret).textFieldStyle(.roundedBorder)
             HStack {
-                Button("Salvează în Keychain și testează") {
+                Button("Salvează și testează") {
                     do {
                         try manager.saveCredentials(accountIdentifier: accountIdentifier, clientIdentifier: clientIdentifier, clientSecret: clientSecret)
                         accountIdentifier = ""

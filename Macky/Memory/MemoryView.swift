@@ -18,7 +18,7 @@ struct MemoryView: View {
                 .tabItem { Label("Setări", systemImage: "slider.horizontal.3") }
         }
         .padding()
-        .frame(minWidth: 700, minHeight: 520)
+        .frame(minWidth: 520, minHeight: 420)
     }
 }
 

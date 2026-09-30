@@ -81,7 +81,7 @@ enum SpeechEngineChoice: String, CaseIterable, Identifiable {
     }
 }
 
-/// All user preferences, persisted in UserDefaults. The API key is NOT here; it lives in the Keychain.
+/// All user preferences, persisted in UserDefaults. The API key is NOT here; it lives in the secrets store (KeychainStore).
 @MainActor
 final class AppSettings: ObservableObject {
     private let defaults = UserDefaults.standard

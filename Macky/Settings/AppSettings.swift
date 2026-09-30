@@ -105,6 +105,12 @@ final class AppSettings: ObservableObject {
     /// Models that rejected the "no reasoning" setting; they are called without it.
     @Published private(set) var modelsRejectingReasoningSetting: Set<String> { didSet { defaults.set(Array(modelsRejectingReasoningSetting), forKey: Keys.modelsRejectingReasoningSetting) } }
 
+    /// Long-term memory: learns from conversations and gives relevant memories to the model.
+    @Published var memoryEnabled: Bool { didSet { defaults.set(memoryEnabled, forKey: Keys.memoryEnabled) } }
+    /// Requests solved the same way twice are then replayed directly, without the model.
+    @Published var learnedProceduresEnabled: Bool { didSet { defaults.set(learnedProceduresEnabled, forKey: Keys.learnedProceduresEnabled) } }
+    @Published var historyEnabled: Bool { didSet { defaults.set(historyEnabled, forKey: Keys.historyEnabled) } }
+
     @Published var rememberedExchangeCount: Int { didSet { defaults.set(rememberedExchangeCount, forKey: Keys.rememberedExchangeCount) } }
     /// Models that answered "tool use not supported"; they get text tags instead of the point_at tool.
     @Published private(set) var modelsWithoutToolCalling: Set<String> { didSet { defaults.set(Array(modelsWithoutToolCalling), forKey: Keys.modelsWithoutToolCalling) } }
@@ -133,7 +139,10 @@ final class AppSettings: ObservableObject {
             Keys.notchPanelEnabled: true,
             Keys.showMenuBarIcon: false,
             Keys.disableModelReasoning: true,
-            Keys.quickCommandsEnabled: true
+            Keys.quickCommandsEnabled: true,
+            Keys.memoryEnabled: true,
+            Keys.learnedProceduresEnabled: true,
+            Keys.historyEnabled: true
         ])
 
         fastModelIdentifier = defaults.string(forKey: Keys.fastModelIdentifier) ?? ""
@@ -160,6 +169,9 @@ final class AppSettings: ObservableObject {
         quickCommandsEnabled = defaults.bool(forKey: Keys.quickCommandsEnabled)
         modelsRejectingReasoningSetting = Set(defaults.stringArray(forKey: Keys.modelsRejectingReasoningSetting) ?? [])
         rememberedExchangeCount = defaults.integer(forKey: Keys.rememberedExchangeCount)
+        memoryEnabled = defaults.bool(forKey: Keys.memoryEnabled)
+        learnedProceduresEnabled = defaults.bool(forKey: Keys.learnedProceduresEnabled)
+        historyEnabled = defaults.bool(forKey: Keys.historyEnabled)
         modelsWithoutToolCalling = Set(defaults.stringArray(forKey: Keys.modelsWithoutToolCalling) ?? [])
     }
 
@@ -228,5 +240,8 @@ final class AppSettings: ObservableObject {
         static let disableModelReasoning = "disableModelReasoning"
         static let quickCommandsEnabled = "quickCommandsEnabled"
         static let modelsRejectingReasoningSetting = "modelsRejectingReasoningSetting"
+        static let memoryEnabled = "memoryEnabled"
+        static let learnedProceduresEnabled = "learnedProceduresEnabled"
+        static let historyEnabled = "historyEnabled"
     }
 }

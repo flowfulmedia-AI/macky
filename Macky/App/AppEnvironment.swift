@@ -15,6 +15,8 @@ final class AppEnvironment {
     let overlayController = CompanionOverlayController()
     let drawingOverlayController = DrawingOverlayController()
     let companionSession: CompanionSession
+    let memoryManager: MemoryManager
+    let historyStore: HistoryStore
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -25,6 +27,8 @@ final class AppEnvironment {
 
     init() {
         modelCatalogStore = ModelCatalogStore(openRouterClient: openRouterClient)
+        memoryManager = MemoryManager(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient)
+        historyStore = HistoryStore(settings: settings)
         companionSession = CompanionSession(
             settings: settings,
             apiKeyStore: apiKeyStore,
@@ -32,7 +36,9 @@ final class AppEnvironment {
             overlayController: overlayController,
             drawingOverlayController: drawingOverlayController,
             spotifyCredentialsStore: spotifyCredentialsStore,
-            openRouterClient: openRouterClient
+            openRouterClient: openRouterClient,
+            memoryManager: memoryManager,
+            historyStore: historyStore
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -65,6 +71,7 @@ final class AppEnvironment {
             .store(in: &cancellables)
 
         companionSession.prepareTranscriber()
+        memoryManager.start()
 
         Task {
             await modelCatalogStore.refresh()
@@ -91,7 +98,9 @@ final class AppEnvironment {
             modelCatalogStore: modelCatalogStore,
             agentManager: companionSession.backgroundAgentManager,
             openSettings: { [unowned self] in self.openSettings() },
-            openCalibration: { [unowned self] in self.openCalibration() }
+            openCalibration: { [unowned self] in self.openCalibration() },
+            openMemory: { [unowned self] in self.openMemory() },
+            openHistory: { [unowned self] in self.openHistory() }
         ))
     }
 
@@ -153,6 +162,20 @@ final class AppEnvironment {
                 spotifyCredentialsStore: spotifyCredentialsStore,
                 openRouterClient: openRouterClient
             )
+        }
+    }
+
+    private func openMemory() {
+        hidePanels()
+        _ = windowCoordinator.showWindow(identifier: "memory", title: "Memoria lui Macky", size: NSSize(width: 820, height: 640)) {
+            MemoryView(memoryManager: memoryManager, settings: settings)
+        }
+    }
+
+    private func openHistory() {
+        hidePanels()
+        _ = windowCoordinator.showWindow(identifier: "history", title: "Istoric Macky", size: NSSize(width: 760, height: 640)) {
+            HistoryView(historyStore: historyStore, settings: settings)
         }
     }
 

@@ -12,6 +12,8 @@ struct CompanionPanelView: View {
 
     let openSettings: () -> Void
     let openCalibration: () -> Void
+    let openMemory: () -> Void
+    let openHistory: () -> Void
 
     @State private var typedQuestion = ""
 
@@ -186,11 +188,15 @@ struct CompanionPanelView: View {
             }
             HStack(spacing: 14) {
                 footerButton("Setări", systemImage: "gearshape", action: openSettings)
-                footerButton("Calibrare", systemImage: "scope", action: openCalibration)
-                footerButton("Uită", systemImage: "arrow.counterclockwise", action: { session.forgetConversation() })
-                    .help("Începe o conversație nouă")
+                footerButton("Memorie", systemImage: "brain", action: openMemory)
+                footerButton("Istoric", systemImage: "clock.arrow.circlepath", action: openHistory)
                 Spacer()
-                footerButton("Ieșire", systemImage: "power") { NSApp.terminate(nil) }
+                footerButton("Calibrare", systemImage: "scope", iconOnly: true, action: openCalibration)
+                    .help("Calibrare")
+                footerButton("Conversație nouă", systemImage: "arrow.counterclockwise", iconOnly: true, action: { session.forgetConversation() })
+                    .help("Începe o conversație nouă")
+                footerButton("Ieșire", systemImage: "power", iconOnly: true) { NSApp.terminate(nil) }
+                    .help("Ieșire")
             }
         }
     }
@@ -205,10 +211,16 @@ struct CompanionPanelView: View {
         return summary
     }
 
-    private func footerButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func footerButton(_ title: String, systemImage: String, iconOnly: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.caption)
+            if iconOnly {
+                Image(systemName: systemImage)
+                    .font(.caption)
+                    .accessibilityLabel(title)
+            } else {
+                Label(title, systemImage: systemImage)
+                    .font(.caption)
+            }
         }
         .buttonStyle(.plain)
         .foregroundColor(.secondary)

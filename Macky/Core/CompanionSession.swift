@@ -39,6 +39,12 @@ final class CompanionSession: ObservableObject {
     private let personalDataController = PersonalDataController()
     /// Long tasks that run in the background; shown in the panel.
     let backgroundAgentManager: BackgroundAgentManager
+    let memoryManager: MemoryManager
+    let historyStore: HistoryStore
+    /// The learned procedure that answered the previous request; a correction right after counts against it.
+    private var lastReplayedProcedureIdentifier: UUID?
+    /// Session cost when the current request started, to know what one request cost.
+    private var costAtRequestStart: Double = 0
 
     /// Notices when the user stops talking while still holding the keys (see `audioChunkRecorded`).
     private var speechEndpointDetector = SpeechEndpointDetector()
@@ -70,7 +76,9 @@ final class CompanionSession: ObservableObject {
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
-         openRouterClient: OpenRouterClient) {
+         openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore) {
+        self.memoryManager = memoryManager
+        self.historyStore = historyStore
         self.settings = settings
         self.apiKeyStore = apiKeyStore
         self.modelCatalogStore = modelCatalogStore
@@ -132,7 +140,12 @@ final class CompanionSession: ObservableObject {
         let interactionIdentifier = startNewInteraction()
         overlayController.beginInteraction(activity: .thinking)
         state = .thinking
+        noteNewRequest(question)
         currentInteractionTask = Task {
+            if settings.actionMode != .disabled, let procedure = memoryManager.procedure(matching: question),
+               await runLearnedProcedure(procedure, question: question, interactionIdentifier: interactionIdentifier) {
+                return
+            }
             let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
             let capturedScreens = await captureScreensForQuestion()
             guard isCurrent(interactionIdentifier) else { return }
@@ -257,6 +270,7 @@ final class CompanionSession: ObservableObject {
                 let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier)
                 interactionTimings?.transcriptionFinishedDate = Date()
                 guard isCurrent(interactionIdentifier), let transcript else { return }
+                noteNewRequest(transcript)
 
                 // "Agent, caută…" starts a background job right away.
                 if settings.actionMode != .disabled, let backgroundGoal = BackgroundTaskTrigger.goal(from: transcript) {
@@ -282,6 +296,12 @@ final class CompanionSession: ObservableObject {
                 if settings.quickCommandsEnabled && settings.actionMode != .disabled,
                    let quickCommand = QuickCommandMatcher.match(transcript),
                    await runQuickCommand(quickCommand, question: transcript, interactionIdentifier: interactionIdentifier) {
+                    return
+                }
+
+                // Something Macky already learned to do by itself: replayed directly, no screenshot, no model.
+                if settings.actionMode != .disabled, let procedure = memoryManager.procedure(matching: transcript),
+                   await runLearnedProcedure(procedure, question: transcript, interactionIdentifier: interactionIdentifier) {
                     return
                 }
 
@@ -317,6 +337,7 @@ final class CompanionSession: ObservableObject {
             showAndSpeak(outcome.message)
         }
         conversationHistory.record(userText: question, assistantText: outcome.message)
+        recordInHistory(question: question, answer: outcome.message, actions: [systemCommand.userFacingDescription], route: .quickCommand)
         isAnswerStreamComplete = true
         if !speechSpeaker.isSpeaking {
             finishInteraction()
@@ -332,6 +353,7 @@ final class CompanionSession: ObservableObject {
         interactionTimings?.firstResponseDate = Date()
         interactionTimings?.workFinishedDate = Date()
         conversationHistory.record(userText: question, assistantText: "Am pornit un agent în fundal pentru: \(goal)")
+        recordInHistory(question: question, answer: "Agent pornit în fundal.", actions: [goal], route: .backgroundAgent)
         isAnswerStreamComplete = true
         if !speechSpeaker.isSpeaking {
             finishInteraction()
@@ -404,6 +426,7 @@ final class CompanionSession: ObservableObject {
             showAndSpeak(outcome.message)
         }
         conversationHistory.record(userText: question, assistantText: lastAnswerText)
+        recordInHistory(question: question, answer: lastAnswerText, actions: [spotifyCommand.userFacingDescription], route: .quickCommand)
         isAnswerStreamComplete = true
         if !speechSpeaker.isSpeaking {
             finishInteraction()
@@ -434,11 +457,83 @@ final class CompanionSession: ObservableObject {
         interactionTimings?.wasQuickCommand = true
         interactionTimings?.workFinishedDate = Date()
         conversationHistory.record(userText: question, assistantText: quickCommand.acknowledgement + " (Am făcut: \(quickCommand.action.userFacingDescription).)")
+        recordInHistory(question: question, answer: quickCommand.acknowledgement, actions: [quickCommand.action.userFacingDescription], route: .quickCommand)
         isAnswerStreamComplete = true
         if !speechSpeaker.isSpeaking {
             finishInteraction()
         }
         return true
+    }
+
+    // MARK: Memory, procedures, history
+
+    /// Called once per request, before it is handled.
+    private func noteNewRequest(_ question: String) {
+        // "Nu asta…" right after a replayed procedure means the procedure did the wrong thing.
+        if let lastReplayedProcedureIdentifier, MemoryCurator.isCorrection(question) {
+            memoryManager.recordProcedureFailure(lastReplayedProcedureIdentifier)
+        }
+        lastReplayedProcedureIdentifier = nil
+        costAtRequestStart = costTracker.totalCostInCredits
+    }
+
+    /// Replays a learned procedure. Returns false (and the model takes over) when it cannot run or fails.
+    private func runLearnedProcedure(_ procedure: LearnedProcedure, question: String, interactionIdentifier: UUID) async -> Bool {
+        let actions = procedure.toolCalls.enumerated().compactMap { index, storedCall in
+            ScreenAction(toolCall: storedCall.chatToolCall(identifier: "procedure_\(index)"))
+        }
+        guard !actions.isEmpty, actions.count == procedure.toolCalls.count, accessibilityInspector.isTrusted else { return false }
+
+        lastQuestionText = question
+        lastAnswerText = ""
+        isAnswerStreamComplete = false
+        showAndSpeak("Sigur!")
+        interactionTimings?.firstResponseDate = Date()
+        interactionTimings?.wasQuickCommand = true
+        // These exact actions were already approved when Macky learned them.
+        areActionsApprovedForCurrentQuestion = true
+
+        var descriptions: [String] = []
+        var details: [String] = []
+        for action in actions {
+            let outcome = await perform(action, on: [], coordinateConvention: .imagePixels, stepNumber: 1, interactionIdentifier: interactionIdentifier)
+            guard isCurrent(interactionIdentifier) else { return true }
+            switch outcome {
+            case .done(let description, let resultDetail):
+                descriptions.append(description)
+                if let resultDetail, !resultDetail.isEmpty { details.append(resultDetail) }
+            case .declined, .failed:
+                memoryManager.recordProcedureFailure(procedure.id)
+                lastAnswerText = ""
+                return false
+            }
+        }
+        interactionTimings?.workFinishedDate = Date()
+        memoryManager.recordProcedureUse(procedure.id)
+        lastReplayedProcedureIdentifier = procedure.id
+        let shownAnswer = "⚡ " + (details.isEmpty ? descriptions.joined(separator: ", ") : details.joined(separator: " "))
+        lastAnswerText = shownAnswer
+        overlayController.setBubbleText(shownAnswer)
+        conversationHistory.record(userText: question, assistantText: "Sigur! (Am făcut: \(descriptions.joined(separator: "; ")).)")
+        recordInHistory(question: question, answer: shownAnswer, actions: descriptions, route: .procedure)
+        isAnswerStreamComplete = true
+        if !speechSpeaker.isSpeaking {
+            finishInteraction()
+        }
+        return true
+    }
+
+    private func recordInHistory(question: String, answer: String, actions: [String], route: HistoryEntry.Route) {
+        let cost = costTracker.totalCostInCredits - costAtRequestStart
+        historyStore.record(HistoryEntry(
+            question: question,
+            answer: answer,
+            actions: actions,
+            route: route,
+            modelIdentifier: route == .model ? lastAnswerModelIdentifier : nil,
+            costInDollars: cost > 0 ? cost : nil,
+            durationInSeconds: interactionTimings.map { Date().timeIntervalSince($0.releaseDate) }
+        ))
     }
 
     private func cancelListening() {
@@ -523,6 +618,8 @@ final class CompanionSession: ObservableObject {
         let coordinateConvention = settings.coordinateConvention(forModelIdentifier: modelIdentifier)
         var useToolCalling = settings.shouldUseToolCalling(forModelIdentifier: modelIdentifier, catalogModel: modelCatalogStore.model(withIdentifier: modelIdentifier))
         var disableReasoning = settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier)
+        let memoryContext = await memoryManager.contextBlock(for: question)
+        guard isCurrent(interactionIdentifier) else { return }
 
         // Retries only happen when the model rejects a setting before answering anything;
         // the model is remembered so the next question goes straight through.
@@ -538,6 +635,7 @@ final class CompanionSession: ObservableObject {
                     coordinateConvention: coordinateConvention,
                     useToolCalling: useToolCalling,
                     disableReasoning: disableReasoning,
+                    memoryContext: memoryContext,
                     interactionIdentifier: interactionIdentifier
                 )
                 return
@@ -576,23 +674,28 @@ final class CompanionSession: ObservableObject {
         coordinateConvention: CoordinateConvention,
         useToolCalling: Bool,
         disableReasoning: Bool,
+        memoryContext: String?,
         interactionIdentifier: UUID
     ) async throws {
         let actionsEnabled = useToolCalling && settings.actionMode != .disabled
+        let memoryToolsEnabled = useToolCalling && settings.memoryEnabled
         var tools: [MackyTool] = useToolCalling ? [.pointAt] : []
         if actionsEnabled { tools += MackyTool.actingTools }
+        if memoryToolsEnabled { tools += MackyTool.memoryTools }
 
         let systemPrompt = MackyPrompt.systemPrompt(
             language: settings.responseLanguage,
             pointingMode: useToolCalling ? .toolCall : .textTag,
-            actionsEnabled: actionsEnabled
+            actionsEnabled: actionsEnabled,
+            memoryEnabled: memoryToolsEnabled
         )
         let userText = MackyPrompt.userMessageText(
             question: question,
             screenshots: capturedScreens.map(\.promptDescription),
             frontmostApplication: frontmostApplication.context,
             coordinateConvention: coordinateConvention,
-            userMarkings: Self.markings(from: userDrawingStrokes, on: capturedScreens, coordinateConvention: coordinateConvention)
+            userMarkings: Self.markings(from: userDrawingStrokes, on: capturedScreens, coordinateConvention: coordinateConvention),
+            memoryContext: memoryContext
         )
         let userParts: [ChatContentPart] = [.text(userText)] + capturedScreens.map { .jpegImage(base64EncodedData: $0.jpegData.base64EncodedString()) }
         conversationHistory.maximumRememberedExchanges = max(0, settings.rememberedExchangeCount)
@@ -602,6 +705,10 @@ final class CompanionSession: ObservableObject {
         var spokenAnswerParts: [String] = []
         var pointedLabels: [String] = []
         var performedActionDescriptions: [String] = []
+        // For learning: what was done, and whether anything went wrong.
+        var executedToolCalls: [ChatToolCall] = []
+        var failureReasons: [String] = []
+        var taskEndedCleanly = true
         isAnswerStreamComplete = false
         areActionsApprovedForCurrentQuestion = false
 
@@ -625,7 +732,8 @@ final class CompanionSession: ObservableObject {
 
             let requestedActions = stepResult.toolCalls.compactMap { ScreenAction(toolCall: $0) }
             let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
-            guard actionsEnabled, !requestedActions.isEmpty else {
+            let onlyMemoryOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.isMemoryOperation)
+            guard (actionsEnabled || onlyMemoryOperations), !requestedActions.isEmpty else {
                 if !isFirstStep && !stepResult.visibleText.isEmpty {
                     // A quiet step that ends with a message (a problem, a question): say it now.
                     showAndSpeak(stepResult.visibleText)
@@ -660,18 +768,23 @@ final class CompanionSession: ObservableObject {
                 } else if let action = ScreenAction(toolCall: toolCall) {
                     switch await perform(action, on: currentScreens, coordinateConvention: coordinateConvention, stepNumber: stepNumber, interactionIdentifier: interactionIdentifier) {
                     case .done(let description, let resultDetail):
-                        performedActionDescriptions.append(description)
+                        if !action.isMemoryOperation { performedActionDescriptions.append(description) }
+                        executedToolCalls.append(toolCall)
                         resultText = resultDetail.map { $0.isEmpty ? "Done." : "Done. Result: \($0)" } ?? "Done."
                     case .declined:
                         userDeclined = true
+                        taskEndedCleanly = false
                         resultText = "The user declined this action."
                     case .failed(let reason):
                         anyActionFailed = true
+                        taskEndedCleanly = false
+                        failureReasons.append("\(action.userFacingDescription): \(reason)")
                         resultText = "Failed: \(reason)"
                     }
                 } else if toolCall.name == MackyTool.pointAt.rawValue {
                     resultText = "Shown to the user."
                 } else if toolCall.name == MackyTool.taskDone.rawValue {
+                    executedToolCalls.append(toolCall)
                     resultText = "OK."
                 } else {
                     resultText = "Invalid tool call arguments."
@@ -685,6 +798,19 @@ final class CompanionSession: ObservableObject {
                 break agentLoop
             }
 
+            // Memory tools need no new screenshot. After "remember"/"forget" with an answer already given, the turn is over;
+            // after "recall" the model needs one more step to answer with what was found.
+            if onlyMemoryOperations {
+                let needsAnotherStep = stepResult.visibleText.isEmpty || requestedActions.contains {
+                    if case .recall = $0 { return true }
+                    return false
+                }
+                if !needsAnotherStep || stepNumber == Self.maximumAgentSteps { break agentLoop }
+                state = .thinking
+                overlayController.setActivity(.thinking)
+                continue agentLoop
+            }
+
             if userDeclined {
                 let declinedAnswer = "Bine, nu fac asta."
                 spokenAnswerParts.append(declinedAnswer)
@@ -692,6 +818,7 @@ final class CompanionSession: ObservableObject {
                 break agentLoop
             }
             if stepNumber == Self.maximumAgentSteps {
+                taskEndedCleanly = false
                 let limitAnswer = "Am făcut \(performedActionDescriptions.count) pași și mă opresc aici. Spune-mi dacă să continui."
                 spokenAnswerParts.append(limitAnswer)
                 showAndSpeak(limitAnswer)
@@ -742,6 +869,12 @@ final class CompanionSession: ObservableObject {
         if !performedActionDescriptions.isEmpty { rememberedAnswer += " (Am făcut: \(performedActionDescriptions.joined(separator: "; ")).)" }
         conversationHistory.record(userText: question, assistantText: rememberedAnswer)
         interactionTimings?.workFinishedDate = Date()
+        recordInHistory(question: question, answer: finalAnswer, actions: performedActionDescriptions, route: .model)
+        memoryManager.recordExchange(question: question, answer: finalAnswer, actions: performedActionDescriptions, failures: failureReasons)
+        if taskEndedCleanly, memoryManager.recordSuccessfulRun(request: question, toolCalls: executedToolCalls) != nil {
+            // Shown, not spoken: next time this request runs instantly.
+            overlayController.setBubbleText((lastAnswerText.isEmpty ? finalAnswer : lastAnswerText) + " ⚡ Am învățat: data viitoare fac asta instant.")
+        }
         isAnswerStreamComplete = true
 
         guard isCurrent(interactionIdentifier) else { return }
@@ -772,7 +905,8 @@ final class CompanionSession: ObservableObject {
             messages: messages,
             tools: tools,
             coordinateConvention: coordinateConvention,
-            disableReasoning: disableReasoning
+            disableReasoning: disableReasoning,
+            cacheSystemPrompt: OpenRouterRequestBuilder.needsExplicitPromptCaching(modelIdentifier: modelIdentifier)
         )
 
         var pointTagFilter = PointTagStreamFilter()
@@ -852,6 +986,16 @@ final class CompanionSession: ObservableObject {
 
     private func perform(_ action: ScreenAction, on screens: [CapturedScreen], coordinateConvention: CoordinateConvention,
                          stepNumber: Int, interactionIdentifier: UUID) async -> ActionOutcome {
+        switch action {
+        case .remember(let kind, let subject, let content):
+            return .done(action.userFacingDescription, resultDetail: await memoryManager.remember(kind: kind, subject: subject, content: content))
+        case .forget(let query):
+            return .done(action.userFacingDescription, resultDetail: await memoryManager.forget(query: query))
+        case .recall(let query):
+            return .done(action.userFacingDescription, resultDetail: await memoryManager.recall(query: query))
+        default:
+            break
+        }
         guard accessibilityInspector.isTrusted else {
             return .failed("Macky does not have the Accessibility permission, so it cannot click or type.")
         }
@@ -937,6 +1081,8 @@ final class CompanionSession: ObservableObject {
         case .startBackgroundTask(let goal):
             backgroundAgentManager.start(goal: goal)
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
+        case .remember, .forget, .recall:
+            break
         case .clickElement(let label, let applicationName):
             let pressResult = await accessibilityElementFinder.pressElement(label: label, applicationName: applicationName)
             guard pressResult.succeeded else {

@@ -9,7 +9,7 @@ Inspirat de HeyClicky, construit pentru uz personal și fără costuri fixe:
 |---|---|---|
 | Transcrierea vocii tale | Whisper rulat local (WhisperKit) | gratuit, audio-ul nu pleacă de pe Mac |
 | Creierul (vede ecranul, răspunde, arată) | orice model cu viziune de pe **OpenRouter** (Claude, Gemini, GPT, Qwen…) | din creditele tale OpenRouter |
-| Vocea lui Macky | vocile macOS (ex. Ioana Enhanced) | gratuit |
+| Vocea lui Macky | voci neurale Microsoft Edge (Alina, Emil), cu vocile macOS ca rezervă | gratuit |
 | Semnarea aplicației | certificat creat local, fără cont Apple Developer | gratuit |
 | Server | niciunul, aplicația vorbește direct cu OpenRouter | — |
 
@@ -26,6 +26,14 @@ Inspirat de HeyClicky, construit pentru uz personal și fără costuri fixe:
 - **Agent în fundal**: „Agent, caută cele mai bune 5 microfoane sub 500 de lei și fă-mi o comparație”. Lucrează cât faci altceva și salvează rezultatul în Documents/Macky.
 - **Notch**: panoul coboară din notch când duci mouse-ul acolo; cât lucrează, Macky arată un indicator lângă notch.
 - **Dictează** (ține apăsat ⌃⇧): transcrie local și lipește textul în orice aplicație. Nu folosește AI, deci nu costă nimic.
+- **Memorie**: învață singur din conversații cine sunt clienții tăi, unde sunt fișierele, ce preferi și din greșeli (lecții). O dată pe zi își reorganizează memoria și îți scrie profilul. Totul se vede și se editează în fereastra Memorie.
+- **Proceduri învățate (⚡)**: o cerere rezolvată la fel de două ori se repetă apoi instant, fără model și fără cost.
+- **Istoric**: toate cererile, căutabile, cu ce a făcut Macky și cât a costat.
+- **Conversație fără taste**: după un răspuns, Macky mai ascultă câteva secunde, ca să poți continua direct.
+- **Asistent de scris**: selectează text în orice aplicație și spune „rescrie mai formal”, „tradu”, „corectează”. Folosește skill-urile tale din Claude (Setări → Skills).
+- **Fișiere, Gmail, Google Drive**: „găsește contractul Nordic”, „ce mi-a scris Andrei ieri?”. Doar citire (Setări → Conexiuni).
+- **Web**: răspunde cu informații actuale de pe internet.
+- **Rutine**: „brief de dimineață”, „mod lucru”, la o frază sau la o oră fixă, editabile în Setări → Rutine.
 - **Întrerupere**: o nouă apăsare oprește imediat răspunsul curent.
 - **Conversație**: ține minte ultimele replici; doar întrebarea curentă trimite captura, ca să coste puțin.
 - **Două modele**: „Rapid” și „Puternic”, comutabile din panou. Costul fiecărui răspuns se vede în panou.

@@ -8,6 +8,8 @@ import MackyCore
 final class SkillLibrary: ObservableObject {
     @Published private(set) var skills: [SkillDefinition] = []
     @Published private(set) var lastError: String?
+    /// Skills found in the Claude desktop app's own folder.
+    @Published private(set) var claudeDesktopSkillCount = 0
 
     private let settings: AppSettings
     private var lastScannedModificationDate: Date?
@@ -43,11 +45,44 @@ final class SkillLibrary: ObservableObject {
         var foundSkills = Self.skills(in: folderURL)
         // Claude Code's personal skills are picked up too, unless one with the same name is already here.
         let claudeCodeFolder = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills", isDirectory: true)
-        for skill in Self.skills(in: claudeCodeFolder) where !foundSkills.contains(where: { $0.name.caseInsensitiveCompare(skill.name) == .orderedSame }) {
+        // The Claude desktop app keeps a copy of the account's skills on disk (used by Cowork): read them in place.
+        let claudeDesktopSkills = Self.skillsFoundAnywhere(in: Self.claudeDesktopFolder)
+        claudeDesktopSkillCount = claudeDesktopSkills.count
+        for skill in Self.skills(in: claudeCodeFolder) + claudeDesktopSkills
+        where !foundSkills.contains(where: { $0.name.caseInsensitiveCompare(skill.name) == .orderedSame }) {
             foundSkills.append(skill)
         }
         skills = foundSkills
         lastError = nil
+    }
+
+    static var claudeDesktopFolder: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude", isDirectory: true)
+    }
+
+    /// Every SKILL.md under a folder, skipping the app's caches and virtual machine images.
+    private static func skillsFoundAnywhere(in folderURL: URL) -> [SkillDefinition] {
+        let skippedFolders: Set<String> = ["cache", "code cache", "gpucache", "indexeddb", "local storage", "session storage", "partitions",
+                                           "blob_storage", "crashpad", "logs", "vm_bundles", "claude-code-vm", "service worker", "node_modules", ".git"]
+        guard let enumerator = FileManager.default.enumerator(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        var found: [SkillDefinition] = []
+        var visited = 0
+        while let url = enumerator.nextObject() as? URL, visited < 200_000 {
+            visited += 1
+            let name = url.lastPathComponent.lowercased()
+            if skippedFolders.contains(name) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard name == "skill.md",
+                  let markdown = try? String(contentsOf: url, encoding: .utf8),
+                  let skill = SkillParser.parse(markdown: markdown, fallbackName: url.deletingLastPathComponent().lastPathComponent, sourcePath: url.path),
+                  !found.contains(where: { $0.name.caseInsensitiveCompare(skill.name) == .orderedSame }) else { continue }
+            found.append(skill)
+        }
+        return found
     }
 
     private static func skills(in folderURL: URL) -> [SkillDefinition] {

@@ -815,8 +815,19 @@ private struct AIAccountsPage: View {
                 }
             }
 
-            SettingsGroup(title: "Skill-uri din Claude", footer: "Skill-urile din contul Claude nu se pot descărca automat. Le iei o singură dată, apoi Macky le vede pe toate.") {
+            SettingsGroup(title: "Skill-uri din Claude", footer: "Dacă folosești aplicația Claude pentru Mac, Macky citește automat skill-urile pe care aplicația le ține pe disc. Altfel, le descarci o singură dată.") {
+                SettingsRow(title: "Din aplicația Claude (Mac)",
+                            subtitle: skillLibrary.claudeDesktopSkillCount > 0
+                                ? "Găsite automat, se actualizează singure."
+                                : "Deschide aplicația Claude o dată (Cowork le sincronizează), apoi apasă Caută din nou.") {
+                    HStack(spacing: 8) {
+                        StatusBadge(isOn: skillLibrary.claudeDesktopSkillCount > 0, text: "\(skillLibrary.claudeDesktopSkillCount) skill-uri")
+                        Button("Caută din nou") { skillLibrary.reload() }.buttonStyle(MackySecondaryPillStyle())
+                    }
+                }
+                SettingsDivider()
                 SettingsBlock {
+                    Text("Manual, dacă lipsesc:").font(MackyDesign.rounded(13, .semibold)).foregroundColor(MackyDesign.textPrimary)
                     SettingsSteps(steps: [
                         "claude.ai → Settings → Capabilities → Skills.",
                         "La fiecare skill al tău: „…” → Download (primești un .zip).",

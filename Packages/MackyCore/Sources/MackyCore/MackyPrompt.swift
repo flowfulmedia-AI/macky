@@ -101,6 +101,7 @@ public enum MackyPrompt {
         - Files on the Mac: search_files, then read_file to read one or open_file to show it.
         - Email: search_gmail (Gmail search syntax), then read_email for the full text. The user uses Gmail, never Apple Mail.
         - Google Drive: search_drive, then read_drive_file, or open_url with its link to show it.
+        - WhatsApp (when its tools are offered): whatsapp_chats for recent or unread chats, whatsapp_read for a conversation, whatsapp_search to find something said. Send with whatsapp_send only when the user asked for that message; after sending, say only "Trimis."
         - If memory says where something is, look there first. After finding something the user will need again, remember where it is.
         - Summarize what you found in one or two spoken sentences; do not read long documents aloud.
         """

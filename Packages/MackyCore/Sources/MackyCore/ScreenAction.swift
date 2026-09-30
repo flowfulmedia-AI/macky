@@ -49,6 +49,10 @@ public enum ScreenAction: Equatable, Sendable {
     case readEmail(identifier: String)
     case searchDrive(query: String)
     case readDriveFile(identifier: String)
+    case whatsAppChats(unreadOnly: Bool, limit: Int)
+    case whatsAppRead(chat: String, limit: Int)
+    case whatsAppSearch(query: String)
+    case whatsAppSend(to: String, text: String)
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -160,6 +164,18 @@ public enum ScreenAction: Equatable, Sendable {
         case .readDriveFile:
             guard let identifier = Self.nonEmptyString(arguments["id"]) else { return nil }
             self = .readDriveFile(identifier: identifier)
+        case .whatsAppChats:
+            let unreadOnly = (arguments["unread_only"] as? Bool) ?? ((arguments["unread_only"] as? String) == "true")
+            self = .whatsAppChats(unreadOnly: unreadOnly, limit: min(max(OpenRouterStreamDecoder.integerValue(arguments["limit"]) ?? 15, 1), 50))
+        case .whatsAppRead:
+            guard let chat = Self.nonEmptyString(arguments["chat"]) else { return nil }
+            self = .whatsAppRead(chat: chat, limit: min(max(OpenRouterStreamDecoder.integerValue(arguments["limit"]) ?? 30, 1), 200))
+        case .whatsAppSearch:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .whatsAppSearch(query: query)
+        case .whatsAppSend:
+            guard let recipient = Self.nonEmptyString(arguments["to"]), let text = Self.nonEmptyString(arguments["text"]) else { return nil }
+            self = .whatsAppSend(to: recipient, text: text)
         case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
@@ -234,6 +250,14 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută în Google Drive: \(query)"
         case .readDriveFile:
             return "Citește un fișier din Drive"
+        case .whatsAppChats(let unreadOnly, _):
+            return unreadOnly ? "Citește mesajele WhatsApp necitite" : "Citește conversațiile WhatsApp"
+        case .whatsAppRead(let chat, _):
+            return "Citește WhatsApp: \(chat)"
+        case .whatsAppSearch(let query):
+            return "Caută în WhatsApp: \(query)"
+        case .whatsAppSend(let recipient, let text):
+            return "Trimite pe WhatsApp lui \(recipient): „\(text.count > 60 ? String(text.prefix(60)) + "…" : text)”"
         case .externalTool(let serverName, let toolName, _, _):
             return "\(serverName): \(toolName.replacingOccurrences(of: "_", with: " "))"
         }
@@ -243,7 +267,8 @@ public enum ScreenAction: Equatable, Sendable {
     public var isReadOnly: Bool {
         switch self {
         case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL,
-             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile: return true
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch: return true
         default: return false
         }
     }
@@ -260,7 +285,8 @@ public enum ScreenAction: Equatable, Sendable {
     public var needsNoScreen: Bool {
         switch self {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
-             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool: return true
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend: return true
         default: return false
         }
     }
@@ -269,7 +295,8 @@ public enum ScreenAction: Equatable, Sendable {
     public var returnsInformation: Bool {
         switch self {
         case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders,
-             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool: return true
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch: return true
         default: return false
         }
     }

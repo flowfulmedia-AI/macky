@@ -46,6 +46,7 @@ final class CompanionSession: ObservableObject {
     let routineStore: RoutineStore
     let mcpConnectionStore: MCPConnectionStore
     let zoomMeetingsManager: ZoomMeetingsManager
+    let whatsAppController: WhatsAppController
     /// The routine being run, if the current request is one.
     private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
@@ -117,6 +118,7 @@ final class CompanionSession: ObservableObject {
         self.systemController = SystemController(executor: screenActionExecutor)
         self.notesController = NotesController(executor: screenActionExecutor)
         self.windowArranger = WindowArranger(executor: screenActionExecutor)
+        self.whatsAppController = WhatsAppController(settings: settings, executor: screenActionExecutor)
         self.backgroundAgentManager = BackgroundAgentManager(
             settings: settings,
             apiKeyStore: apiKeyStore,
@@ -932,6 +934,7 @@ final class CompanionSession: ObservableObject {
             tools += MackyTool.informationTools.filter { tool in
                 if tool == .useSkill { return !skills.isEmpty }
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
+                if MackyTool.whatsAppTools.contains(tool) { return whatsAppController.isAvailable }
                 return true
             }
         }
@@ -1304,6 +1307,27 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
         case .readDriveFile(let identifier):
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readDriveFile(identifier: identifier))
+        case .whatsAppChats(let unreadOnly, let limit):
+            do {
+                return .done(action.userFacingDescription, resultDetail: WhatsAppKit.chatListText(try whatsAppController.chats(unreadOnly: unreadOnly, limit: limit)))
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        case .whatsAppRead(let chat, let limit):
+            do {
+                guard let conversation = try whatsAppController.messages(inChatNamed: chat, limit: limit) else {
+                    return .failed("No WhatsApp chat is called \(chat).")
+                }
+                return .done(action.userFacingDescription, resultDetail: "Chat: \(conversation.chat.name)\n" + WhatsAppKit.transcript(conversation.messages))
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        case .whatsAppSearch(let query):
+            do {
+                return .done(action.userFacingDescription, resultDetail: WhatsAppKit.transcript(try whatsAppController.search(query)))
+            } catch {
+                return .failed(error.localizedDescription)
+            }
         case .externalTool(let serverName, let toolName, let argumentsJSON, let needsConfirmation):
             // Only deleting asks first; creating and editing in the user's own app is what they asked for.
             if needsConfirmation && settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion {
@@ -1410,8 +1434,15 @@ final class CompanionSession: ObservableObject {
             backgroundAgentManager.start(goal: goal)
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
-             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool:
+             .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch:
             break
+        case .whatsAppSend(let recipient, let text):
+            do {
+                return .done(action.userFacingDescription, resultDetail: try await whatsAppController.send(to: recipient, text: text))
+            } catch {
+                return .failed(error.localizedDescription)
+            }
         case .openFile(let path):
             let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
             guard FileManager.default.fileExists(atPath: fileURL.path), NSWorkspace.shared.open(fileURL) else {

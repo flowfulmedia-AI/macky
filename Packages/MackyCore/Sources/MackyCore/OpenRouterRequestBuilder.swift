@@ -41,11 +41,16 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case readEmail = "read_email"
     case searchDrive = "search_drive"
     case readDriveFile = "read_drive_file"
+    // WhatsApp through the Mac app.
+    case whatsAppChats = "whatsapp_chats"
+    case whatsAppRead = "whatsapp_read"
+    case whatsAppSearch = "whatsapp_search"
+    case whatsAppSend = "whatsapp_send"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
         .spotify, .systemControl, .createEvent, .listEvents, .createReminder, .listReminders, .createNote, .arrangeWindow,
-        .startBackgroundTask, .replaceSelection, .openFile, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
+        .startBackgroundTask, .replaceSelection, .openFile, .whatsAppSend, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
     ]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
@@ -58,8 +63,11 @@ public enum MackyTool: String, CaseIterable, Sendable {
     public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
-        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile
+        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
+        .whatsAppChats, .whatsAppRead, .whatsAppSearch
     ]
+    /// Need WhatsApp to be enabled in Settings.
+    public static let whatsAppTools: Set<MackyTool> = [.whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend]
     /// Need a connected Google account.
     public static let googleTools: Set<MackyTool> = [.searchGmail, .readEmail, .searchDrive, .readDriveFile]
 
@@ -314,6 +322,32 @@ public enum OpenRouterRequestBuilder {
                 + "To show it to the user instead, call open_url with its link."
             properties = ["id": ["type": "string"]]
             required = ["id"]
+        case .whatsAppChats:
+            description = "Lists the user's recent WhatsApp chats with unread counts and the last message."
+            properties = [
+                "unread_only": ["type": "boolean", "description": "Only chats with unread messages."],
+                "limit": ["type": "integer", "description": "Default 15."]
+            ]
+            required = []
+        case .whatsAppRead:
+            description = "Reads the latest messages of one WhatsApp chat (a person or a group), by the name shown in WhatsApp."
+            properties = [
+                "chat": ["type": "string", "description": "Contact or group name, e.g. 'Andrei' or 'Echipa Fondatorii'."],
+                "limit": ["type": "integer", "description": "How many recent messages, default 30."]
+            ]
+            required = ["chat"]
+        case .whatsAppSearch:
+            description = "Searches the text of all WhatsApp messages."
+            properties = ["query": ["type": "string"]]
+            required = ["query"]
+        case .whatsAppSend:
+            description = "Sends a WhatsApp message to a person (not groups), by contact name as shown in WhatsApp or by phone number. "
+                + "Use only when the user asked you to send it (a routine counts). Write it the way the user writes."
+            properties = [
+                "to": ["type": "string", "description": "Contact name or phone number."],
+                "text": ["type": "string", "description": "The exact message."]
+            ]
+            required = ["to", "text"]
         case .useSkill:
             description = "Loads one of the user's Claude skills by name and returns its instructions, which you must then follow."
             properties = [

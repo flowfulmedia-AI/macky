@@ -132,6 +132,10 @@ final class AppSettings: ObservableObject {
     @Published var skillsFolderPath: String { didSet { defaults.set(skillsFolderPath, forKey: Keys.skillsFolderPath) } }
     @Published var speechEngine: SpeechEngineChoice { didSet { defaults.set(speechEngine.rawValue, forKey: Keys.speechEngine) } }
     @Published var neuralVoiceIdentifier: String { didSet { defaults.set(neuralVoiceIdentifier, forKey: Keys.neuralVoiceIdentifier) } }
+    /// Read and send WhatsApp messages through the WhatsApp Mac app.
+    @Published var whatsAppEnabled: Bool { didSet { defaults.set(whatsAppEnabled, forKey: Keys.whatsAppEnabled) } }
+    /// Added to phone numbers said without a country code ("0722…" → "40722…").
+    @Published var whatsAppCountryCode: String { didSet { defaults.set(whatsAppCountryCode, forKey: Keys.whatsAppCountryCode) } }
 
     @Published var rememberedExchangeCount: Int { didSet { defaults.set(rememberedExchangeCount, forKey: Keys.rememberedExchangeCount) } }
     /// Models that answered "tool use not supported"; they get text tags instead of the point_at tool.
@@ -167,7 +171,9 @@ final class AppSettings: ObservableObject {
             Keys.historyEnabled: true,
             Keys.followUpListeningEnabled: true,
             Keys.speechEngine: SpeechEngineChoice.neural.rawValue,
-            Keys.neuralVoiceIdentifier: "ro-RO-AlinaNeural"
+            Keys.neuralVoiceIdentifier: "ro-RO-AlinaNeural",
+            Keys.whatsAppEnabled: true,
+            Keys.whatsAppCountryCode: "40"
         ])
 
         fastModelIdentifier = defaults.string(forKey: Keys.fastModelIdentifier) ?? ""
@@ -201,6 +207,8 @@ final class AppSettings: ObservableObject {
         skillsFolderPath = defaults.string(forKey: Keys.skillsFolderPath) ?? ""
         speechEngine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.speechEngine) ?? "") ?? .neural
         neuralVoiceIdentifier = defaults.string(forKey: Keys.neuralVoiceIdentifier) ?? "ro-RO-AlinaNeural"
+        whatsAppEnabled = defaults.bool(forKey: Keys.whatsAppEnabled)
+        whatsAppCountryCode = defaults.string(forKey: Keys.whatsAppCountryCode) ?? "40"
         modelsWithoutToolCalling = Set(defaults.stringArray(forKey: Keys.modelsWithoutToolCalling) ?? [])
     }
 
@@ -276,5 +284,7 @@ final class AppSettings: ObservableObject {
         static let skillsFolderPath = "skillsFolderPath"
         static let speechEngine = "speechEngine"
         static let neuralVoiceIdentifier = "neuralVoiceIdentifier"
+        static let whatsAppEnabled = "whatsAppEnabled"
+        static let whatsAppCountryCode = "whatsAppCountryCode"
     }
 }

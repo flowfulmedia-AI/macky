@@ -30,6 +30,7 @@ targets:
     dependencies:
       - package: MackyCore
       - package: WhisperKit
+      - sdk: libsqlite3.tbd
         product: WhisperKit
     info:
       path: Macky/Info.plist

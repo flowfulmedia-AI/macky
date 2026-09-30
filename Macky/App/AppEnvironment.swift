@@ -228,7 +228,7 @@ final class AppEnvironment {
 
     private func openSettings() {
         hidePanels()
-        _ = windowCoordinator.showWindow(identifier: "settings", title: "Setări Macky", size: NSSize(width: 860, height: 740)) {
+        _ = windowCoordinator.showWindow(identifier: "settings", title: "Setări Macky", size: NSSize(width: 980, height: 760)) {
             SettingsView(
                 settings: settings,
                 apiKeyStore: apiKeyStore,
@@ -240,7 +240,12 @@ final class AppEnvironment {
                 googleAccountManager: googleAccountManager,
                 routineStore: routineStore,
                 mcpConnectionStore: mcpConnectionStore,
-                zoomMeetingsManager: zoomMeetingsManager
+                zoomMeetingsManager: zoomMeetingsManager,
+                whatsAppController: companionSession.whatsAppController,
+                memoryManager: memoryManager,
+                openMemory: { [unowned self] in self.openMemory() },
+                openHistory: { [unowned self] in self.openHistory() },
+                openCalibration: { [unowned self] in self.openCalibration() }
             )
         }
     }

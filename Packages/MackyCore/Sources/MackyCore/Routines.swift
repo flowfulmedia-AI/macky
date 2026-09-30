@@ -99,6 +99,7 @@ public struct Routine: Codable, Identifiable, Equatable, Sendable {
         - întâlnirile din calendar de azi, cu ora;
         - reminderele de azi și cele întârziate;
         - mailurile importante necitite din ultimele 24 de ore (de la clienți sau care cer un răspuns), pe scurt, cine și ce vrea;
+        - mesajele WhatsApp necitite, pe scurt, de la cine și ce vor (dacă WhatsApp e conectat);
         - vremea de azi în orașul meu (din memorie; dacă nu îl știi, sari peste).
         Începe cu cel mai important lucru. Maximum 6 propoziții.
         """

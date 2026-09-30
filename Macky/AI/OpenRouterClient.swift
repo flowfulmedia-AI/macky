@@ -31,7 +31,7 @@ final class OpenRouterClient: @unchecked Sendable {
 
     func streamChatCompletion(requestBody: Data, apiKey: String, purpose: UsagePurpose = .questions) -> AsyncThrowingStream<LLMStreamEvent, Error> {
         let onUsage = self.onUsage
-        AsyncThrowingStream { continuation in
+        return AsyncThrowingStream { continuation in
             let streamingTask = Task {
                 do {
                     var request = makeRequest(path: "chat/completions", apiKey: apiKey)

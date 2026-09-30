@@ -35,10 +35,13 @@ public enum ScreenAction: Equatable, Sendable {
     case startBackgroundTask(goal: String)
     /// Plays, pauses or skips in whatever app is playing media (the keyboard's media keys).
     case mediaKey(MediaKey)
+    case remember(kind: MemoryKind, subject: String, content: String)
+    case forget(query: String)
+    case recall(query: String)
 
     /// Parses an action tool call. Returns nil for `point_at` or malformed arguments.
     public init?(toolCall: ChatToolCall) {
-        guard let tool = MackyTool(rawValue: toolCall.name), tool.isAction else { return nil }
+        guard let tool = MackyTool(rawValue: toolCall.name), tool.isAction || tool.isMemoryTool else { return nil }
         let arguments = (toolCall.argumentsJSON.data(using: .utf8))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
 
@@ -101,6 +104,16 @@ public enum ScreenAction: Equatable, Sendable {
         case .startBackgroundTask:
             guard let goal = Self.nonEmptyString(arguments["goal"]) else { return nil }
             self = .startBackgroundTask(goal: goal)
+        case .remember:
+            guard let content = Self.nonEmptyString(arguments["content"]) else { return nil }
+            let kind = MemoryKind(rawValue: ((arguments["kind"] as? String) ?? "").lowercased()) ?? .fact
+            self = .remember(kind: kind, subject: Self.nonEmptyString(arguments["subject"]) ?? String(content.prefix(40)), content: String(content.prefix(500)))
+        case .forget:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .forget(query: query)
+        case .recall:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .recall(query: query)
         case .pointAt, .taskDone, .webSearch, .fetchURL, .saveFile, .finishTask:
             return nil
         }
@@ -147,13 +160,27 @@ public enum ScreenAction: Equatable, Sendable {
             return "Mută \(applicationName ?? "fereastra") \(layout.displayName)"
         case .startBackgroundTask(let goal):
             return "Agent în fundal: \(goal.count > 60 ? String(goal.prefix(60)) + "…" : goal)"
+        case .remember(_, let subject, _):
+            return "Ține minte: \(subject)"
+        case .forget(let query):
+            return "Uită: \(query)"
+        case .recall(let query):
+            return "Caută în memorie: \(query)"
         }
     }
 
     /// Actions that only read, never change anything, so they need no confirmation.
     public var isReadOnly: Bool {
         switch self {
-        case .listEvents, .listReminders: return true
+        case .listEvents, .listReminders, .recall: return true
+        default: return false
+        }
+    }
+
+    /// Memory tools work on Macky's own data: no screen, no Accessibility, no confirmation.
+    public var isMemoryOperation: Bool {
+        switch self {
+        case .remember, .forget, .recall: return true
         default: return false
         }
     }

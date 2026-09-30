@@ -57,9 +57,19 @@ public struct FrontmostApplicationContext: Equatable, Sendable {
 }
 
 public enum MackyPrompt {
-    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false) -> String {
-        basePrompt(language: language, pointingMode: pointingMode) + (actionsEnabled ? actionInstructions : "")
+    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false, memoryEnabled: Bool = false) -> String {
+        basePrompt(language: language, pointingMode: pointingMode) + (actionsEnabled ? actionInstructions : "") + (memoryEnabled ? memoryInstructions : "")
     }
+
+    static let memoryInstructions = """
+
+
+        Memory:
+        - You have a long-term memory of the user. Relevant memories come with each message under "What you remember". Use them naturally: know their clients, where their files are, how they like things done. Follow the lessons in it.
+        - Call remember when the user asks you to remember something, and also on your own when they mention something durable that will help later (a client and what they work on, where a document or folder is, a preference, a correction of how you did something). Keep answering normally in the same response, e.g. "Am reținut."
+        - Call recall when the user refers to something from the past that is not in "What you remember". Call forget when they ask you to forget something.
+        - Never store passwords, card numbers or codes.
+        """
 
     static let actionInstructions = """
 
@@ -115,9 +125,15 @@ public enum MackyPrompt {
         frontmostApplication: FrontmostApplicationContext?,
         coordinateConvention: CoordinateConvention,
         userMarkings: [UserScreenMarking] = [],
+        memoryContext: String? = nil,
         now: Date = Date()
     ) -> String {
         var lines: [String] = [FlexibleDateParser.currentDateContext(now: now)]
+        if let memoryContext, !memoryContext.isEmpty {
+            // In the user message, not the system prompt, so the system prompt stays identical and cacheable.
+            lines.append(memoryContext)
+            lines.append("")
+        }
         if let frontmostApplication, let applicationName = frontmostApplication.applicationName {
             if let windowTitle = frontmostApplication.windowTitle, !windowTitle.isEmpty {
                 lines.append("Active app: \(applicationName) — window \"\(windowTitle)\".")

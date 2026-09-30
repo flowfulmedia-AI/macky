@@ -26,6 +26,10 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case fetchURL = "fetch_url"
     case saveFile = "save_file"
     case finishTask = "finish_task"
+    // Long-term memory.
+    case remember = "remember"
+    case forget = "forget"
+    case recall = "recall"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
@@ -39,7 +43,11 @@ public enum MackyTool: String, CaseIterable, Sendable {
         .webSearch, .fetchURL, .saveFile, .createNote, .createEvent, .listEvents, .createReminder, .listReminders, .finishTask
     ]
 
+    /// Offered whenever tools are, even when Macky may not act on the computer.
+    public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
+
     public var isAction: Bool { Self.actionTools.contains(self) }
+    public var isMemoryTool: Bool { Self.memoryTools.contains(self) }
 }
 
 /// Builds the JSON body for OpenRouter's OpenAI-compatible `/chat/completions` endpoint.
@@ -53,13 +61,24 @@ public enum OpenRouterRequestBuilder {
         coordinateConvention: CoordinateConvention,
         disableReasoning: Bool = false,
         enableWebSearch: Bool = false,
-        maximumResponseTokens: Int = 700
+        maximumResponseTokens: Int = 700,
+        cacheSystemPrompt: Bool = false
     ) throws -> Data {
+        var encodedMessages = messages.map(encodeMessage)
+        if cacheSystemPrompt, let systemIndex = messages.firstIndex(where: { $0.role == .system }) {
+            // Anthropic models only reuse a prompt prefix when it is marked; the system prompt and tools
+            // are the same in every request, so later requests pay a fraction for them.
+            encodedMessages[systemIndex]["content"] = [[
+                "type": "text",
+                "text": messages[systemIndex].plainText,
+                "cache_control": ["type": "ephemeral"]
+            ] as [String: Any]]
+        }
         var body: [String: Any] = [
             "model": modelIdentifier,
             "stream": true,
             "max_tokens": maximumResponseTokens,
-            "messages": messages.map(encodeMessage),
+            "messages": encodedMessages,
             // Asks OpenRouter to append token counts and the credit cost to the final stream chunk.
             "usage": ["include": true]
         ]
@@ -76,6 +95,11 @@ public enum OpenRouterRequestBuilder {
             body["tool_choice"] = "auto"
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
+    /// Models that need explicit cache markers (others, like OpenAI and Gemini, cache on their own).
+    public static func needsExplicitPromptCaching(modelIdentifier: String) -> Bool {
+        modelIdentifier.hasPrefix("anthropic/")
     }
 
     public static func toolDefinition(for tool: MackyTool, coordinateConvention: CoordinateConvention) -> [String: Any] {
@@ -247,6 +271,30 @@ public enum OpenRouterRequestBuilder {
                 "saved_file_path": ["type": "string", "description": "Path returned by save_file, if any."]
             ]
             required = ["summary"]
+        case .remember:
+            description = "Saves something to Macky's long-term memory. Use it when the user asks you to remember something, "
+                + "or tells you a durable fact worth knowing later: a client or person, where something is (folder, link, account), "
+                + "a preference, or a correction of how you should do something. One idea per call, written in Romanian, self-contained."
+            properties = [
+                "kind": ["type": "string", "enum": MemoryKind.allCases.map(\.rawValue),
+                         "description": "person = clients and people, location = where things are, preference, project, lesson = how to do something next time, profile = about the user, fact = other."],
+                "subject": ["type": "string", "description": "Short title, usually a name, e.g. 'Raluca Dicu' or 'Facturi 2026'."],
+                "content": ["type": "string", "description": "What to remember, under 280 characters."]
+            ]
+            required = ["kind", "subject", "content"]
+        case .forget:
+            description = "Deletes memories matching a description, when the user asks you to forget something or says a memory is wrong."
+            properties = [
+                "query": ["type": "string", "description": "What to forget, e.g. 'adresa lui Andrei'."]
+            ]
+            required = ["query"]
+        case .recall:
+            description = "Searches Macky's long-term memory. Use it when the user refers to something they told you before "
+                + "(a client, a file location, a preference) and it is not already in 'What you remember'."
+            properties = [
+                "query": ["type": "string", "description": "What to look for, e.g. 'client Andrei contract'."]
+            ]
+            required = ["query"]
         case .taskDone:
             description = "Call this in the same response as your final actions when they certainly complete the task, "
                 + "so no new screenshot is needed. Do not call it if you need to check the result."

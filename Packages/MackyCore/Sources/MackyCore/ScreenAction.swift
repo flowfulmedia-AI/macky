@@ -257,7 +257,7 @@ public enum ScreenAction: Equatable, Sendable {
         case .whatsAppSearch(let query):
             return "Caută în WhatsApp: \(query)"
         case .whatsAppSend(let recipient, let text):
-            return "Trimite pe WhatsApp lui \(recipient): „\(text.count > 60 ? String(text.prefix(60)) + "…" : text)”"
+            return "Trimite pe WhatsApp către \(recipient): „\(text.count > 60 ? String(text.prefix(60)) + "…" : text)”"
         case .externalTool(let serverName, let toolName, _, _):
             return "\(serverName): \(toolName.replacingOccurrences(of: "_", with: " "))"
         }

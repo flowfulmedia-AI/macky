@@ -6,6 +6,7 @@ import SQLite3
 /// WhatsApp through the official Mac app (from the App Store or whatsapp.com).
 /// Reading: the app's own database, opened read-only (a copy is used when WhatsApp holds a lock).
 /// Sending: opens the chat with the message typed, presses Enter, then checks the database that it was sent.
+/// Groups have no such link: they are found with WhatsApp's search and the model checks the screen before sending.
 /// macOS asks once for access to the data of other apps (or grant Full Disk Access to Macky).
 @MainActor
 final class WhatsAppController: ObservableObject {
@@ -113,7 +114,13 @@ final class WhatsAppController: ObservableObject {
     // MARK: Sending
 
     /// Returns a short result for the model; throws when it cannot be sent or confirmed.
-    func send(to recipient: String, text: String) async throws -> String {
+    struct SendResult {
+        var detail: String
+        /// Groups are opened through WhatsApp's search, so the model looks at the screen and presses Enter itself.
+        var needsScreenCheck: Bool
+    }
+
+    func send(to recipient: String, text: String) async throws -> SendResult {
         let phoneNumber: String
         let displayName: String
         if let number = WhatsAppKit.normalizedPhoneNumber(recipient, defaultCountryCode: settings.whatsAppCountryCode) {
@@ -124,7 +131,7 @@ final class WhatsAppController: ObservableObject {
                 throw WhatsAppError.unreadable("nu găsesc o conversație cu „\(recipient)”. Spune numele exact din WhatsApp sau numărul de telefon.")
             }
             guard let number = WhatsAppKit.phoneNumber(fromJID: chat.jid) else {
-                throw WhatsAppError.unreadable("„\(chat.name)” e un grup; deocamdată pot trimite doar mesaje către persoane.")
+                return try await typeInGroup(named: chat.name, text: text)
             }
             phoneNumber = number
             displayName = chat.name
@@ -132,15 +139,7 @@ final class WhatsAppController: ObservableObject {
         guard let url = WhatsAppKit.sendURL(phoneNumber: phoneNumber, text: text), NSWorkspace.shared.open(url) else {
             throw WhatsAppError.appNotInstalled
         }
-        // Wait for WhatsApp to come to the front with the chat open and the text typed.
-        for _ in 0..<30 {
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased().contains("whatsapp") == true { break }
-        }
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased().contains("whatsapp") == true else {
-            throw WhatsAppError.unreadable("aplicația WhatsApp nu s-a deschis.")
-        }
+        try await waitForWhatsAppInFront()
         executor.press(KeyCombination(keyCode: 36, modifiers: [], displayName: "Enter"))
 
         // Confirm it in the database: the newest message from me in that chat should be this text.
@@ -149,10 +148,57 @@ final class WhatsAppController: ObservableObject {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if let recent = try? messages(inChatNamed: displayName, limit: 5)?.messages,
                recent.contains(where: { $0.isFromMe && $0.date >= sentAfter && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == text.trimmingCharacters(in: .whitespacesAndNewlines) }) {
-                return "Sent to \(displayName) and confirmed in WhatsApp."
+                return SendResult(detail: "Sent to \(displayName) and confirmed in WhatsApp.", needsScreenCheck: false)
             }
         }
-        return "The message was typed in WhatsApp for \(displayName) and Enter was pressed, but I could not confirm it in the database yet."
+        return SendResult(detail: "The message was typed in WhatsApp for \(displayName) and Enter was pressed, but I could not confirm it in the database yet.", needsScreenCheck: false)
+    }
+
+    /// WhatsApp has no link that opens a group, so: bring the app forward, search the group by its exact name,
+    /// open the first result and type the message without sending it.
+    private func typeInGroup(named groupName: String, text: String) async throws -> SendResult {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp")
+                ?? ScreenActionExecutor.findApplication(named: "WhatsApp") else {
+            throw WhatsAppError.appNotInstalled
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        _ = try? await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+        try await waitForWhatsAppInFront()
+
+        let command = ModifierKeys.command
+        executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        executor.press(KeyCombination(keyCode: 3, modifiers: command, displayName: "⌘F"))
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        executor.press(KeyCombination(keyCode: 0, modifiers: command, displayName: "⌘A"))
+        await executor.type(groupName, pressEnterAfterwards: false)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        executor.press(KeyCombination(keyCode: 125, modifiers: [], displayName: "↓"))
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        executor.press(KeyCombination(keyCode: 36, modifiers: [], displayName: "Enter"))
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await executor.type(text, pressEnterAfterwards: false)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        return SendResult(
+            detail: "NOT SENT YET. \(groupName) is a group, so I searched it in WhatsApp and typed the message without sending. "
+                + "Look at the new screenshot: if the open chat's header is \"\(groupName)\" and the message is in the text box, press Enter (press_keys) to send it. "
+                + "Otherwise fix it on screen (clear the wrong text, click WhatsApp's search, type the group name, click the group, click the message box, type the message, press Enter) "
+                + "and never send to another chat. After sending, say only \"Trimis.\"",
+            needsScreenCheck: true
+        )
+    }
+
+    private func waitForWhatsAppInFront() async throws {
+        func isInFront() -> Bool {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased().contains("whatsapp") == true
+        }
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if isInFront() { break }
+        }
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        guard isInFront() else { throw WhatsAppError.unreadable("aplicația WhatsApp nu s-a deschis.") }
     }
 
     // MARK: Status

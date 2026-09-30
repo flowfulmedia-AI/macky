@@ -34,7 +34,7 @@ Inspirat de HeyClicky, construit pentru uz personal și fără costuri fixe:
 - **Fișiere, Gmail, Google Drive**: „găsește contractul Nordic”, „ce mi-a scris Andrei ieri?”. Doar citire (Setări → Conexiuni).
 - **Web**: răspunde cu informații actuale de pe internet.
 - **Meetinguri Zoom → Drive**: fiecare meeting înregistrat în cloud e transcris, rezumat (decizii, acțiuni) și salvat ca Google Doc (Setări → Conexiuni → Zoom).
-- **WhatsApp** (prin aplicația oficială de Mac): citește conversațiile și mesajele necitite, caută în mesaje și trimite mesaje către persoane, cu confirmare. Merge și în Rutine (ex. brief-ul de dimineață). Setări → Conexiuni → WhatsApp.
+- **WhatsApp** (prin aplicația oficială de Mac): citește conversațiile și mesajele necitite, caută în mesaje și trimite mesaje către persoane și grupuri, cu confirmare. Merge și în Rutine (ex. brief-ul de dimineață). Setări → Conexiuni → WhatsApp.
 - **„Fă task din asta”**: din orice mail, pagină sau mesaj de pe ecran, Macky creează taskul (în Flowts sau Reminders) cu detaliile și linkul.
 - **Aplicațiile tale (MCP)**: Macky se conectează la servere MCP (ex. Flowts) și poate citi și modifica direct taskuri, notițe etc. (Setări → Conexiuni).
 - **Rutine**: „brief de dimineață”, „mod lucru”, la o frază sau la o oră fixă, editabile în Setări → Rutine.

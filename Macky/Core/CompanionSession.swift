@@ -77,6 +77,8 @@ final class CompanionSession: ObservableObject {
     private var currentInteractionTask: Task<Void, Never>?
     private var activeRecordingPurpose: HotkeyAction?
     private var isAnswerStreamComplete = false
+    /// Set by a step whose result must be checked on a fresh screenshot (a WhatsApp group message typed but not sent).
+    private var screenCheckRequested = false
     /// Set when the user answers "Da pentru tot": no more confirmation cards until the next question.
     private var areActionsApprovedForCurrentQuestion = false
     private var interactionTimings: InteractionTimings?
@@ -1010,6 +1012,7 @@ final class CompanionSession: ObservableObject {
             let requestedActions = stepResult.toolCalls.compactMap(resolvedAction(for:))
             let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
             let onlyScreenlessOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.needsNoScreen)
+            screenCheckRequested = false
             guard (actionsEnabled || onlyScreenlessOperations), !requestedActions.isEmpty else {
                 if !isFirstStep && !stepResult.visibleText.isEmpty {
                     // A quiet step that ends with a message (a problem, a question): say it now.
@@ -1071,13 +1074,13 @@ final class CompanionSession: ObservableObject {
             }
 
             // The model said these actions finish the task: no extra screenshot and round trip.
-            if modelSaysTaskIsDone && !userDeclined && !anyActionFailed {
+            if modelSaysTaskIsDone && !userDeclined && !anyActionFailed && !screenCheckRequested {
                 break agentLoop
             }
 
             // Memory, web and skill tools need no new screenshot. After "remember"/"forget" with an answer already given,
             // the turn is over; after tools that return information the model needs one more step to answer with it.
-            if onlyScreenlessOperations {
+            if onlyScreenlessOperations && !screenCheckRequested {
                 let needsAnotherStep = stepResult.visibleText.isEmpty || requestedActions.contains(where: \.returnsInformation)
                 if !needsAnotherStep || stepNumber == Self.maximumAgentSteps { break agentLoop }
                 state = .thinking
@@ -1127,6 +1130,9 @@ final class CompanionSession: ObservableObject {
         if finalAnswer.isEmpty {
             if let firstLabel = pointedLabels.first {
                 finalAnswer = "Uite aici: \(firstLabel)."
+                speak(finalAnswer)
+            } else if let failure = failureReasons.last {
+                finalAnswer = "Nu am reușit: \(failure)"
                 speak(finalAnswer)
             } else if !performedActionDescriptions.isEmpty {
                 // Shown, not spoken: the user asked for fewer words while Macky works.
@@ -1439,7 +1445,9 @@ final class CompanionSession: ObservableObject {
             break
         case .whatsAppSend(let recipient, let text):
             do {
-                return .done(action.userFacingDescription, resultDetail: try await whatsAppController.send(to: recipient, text: text))
+                let result = try await whatsAppController.send(to: recipient, text: text)
+                if result.needsScreenCheck { screenCheckRequested = true }
+                return .done(action.userFacingDescription, resultDetail: result.detail)
             } catch {
                 return .failed(error.localizedDescription)
             }

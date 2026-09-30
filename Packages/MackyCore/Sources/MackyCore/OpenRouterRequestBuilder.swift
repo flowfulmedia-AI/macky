@@ -341,10 +341,10 @@ public enum OpenRouterRequestBuilder {
             properties = ["query": ["type": "string"]]
             required = ["query"]
         case .whatsAppSend:
-            description = "Sends a WhatsApp message to a person (not groups), by contact name as shown in WhatsApp or by phone number. "
+            description = "Sends a WhatsApp message to a person or a group, by the chat name as shown in WhatsApp or by phone number. "
                 + "Use only when the user asked you to send it (a routine counts). Write it the way the user writes."
             properties = [
-                "to": ["type": "string", "description": "Contact name or phone number."],
+                "to": ["type": "string", "description": "Contact or group name, or phone number."],
                 "text": ["type": "string", "description": "The exact message."]
             ]
             required = ["to", "text"]

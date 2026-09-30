@@ -49,6 +49,10 @@ public enum GoogleOAuth {
     public struct OAuthError: Error, Equatable, LocalizedError {
         public var message: String
         public var errorDescription: String? { message }
+
+        public init(message: String) {
+            self.message = message
+        }
     }
 
     public static func parseTokenResponse(_ data: Data) throws -> Tokens {

@@ -19,6 +19,7 @@ final class AppEnvironment {
     let historyStore: HistoryStore
     let skillLibrary: SkillLibrary
     let googleAccountManager = GoogleAccountManager()
+    let routineStore = RoutineStore()
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -43,7 +44,8 @@ final class AppEnvironment {
             memoryManager: memoryManager,
             historyStore: historyStore,
             skillLibrary: skillLibrary,
-            googleAccountManager: googleAccountManager
+            googleAccountManager: googleAccountManager,
+            routineStore: routineStore
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -78,6 +80,10 @@ final class AppEnvironment {
         companionSession.prepareTranscriber()
         memoryManager.start()
         skillLibrary.reload()
+        routineStore.onRoutineDue = { [weak companionSession] routine in
+            companionSession?.startScheduledRoutine(routine) ?? false
+        }
+        routineStore.startScheduler()
 
         Task {
             await modelCatalogStore.refresh()
@@ -159,7 +165,7 @@ final class AppEnvironment {
 
     private func openSettings() {
         hidePanels()
-        _ = windowCoordinator.showWindow(identifier: "settings", title: "Setări Macky", size: NSSize(width: 680, height: 720)) {
+        _ = windowCoordinator.showWindow(identifier: "settings", title: "Setări Macky", size: NSSize(width: 860, height: 740)) {
             SettingsView(
                 settings: settings,
                 apiKeyStore: apiKeyStore,
@@ -168,7 +174,8 @@ final class AppEnvironment {
                 spotifyCredentialsStore: spotifyCredentialsStore,
                 openRouterClient: openRouterClient,
                 skillLibrary: skillLibrary,
-                googleAccountManager: googleAccountManager
+                googleAccountManager: googleAccountManager,
+                routineStore: routineStore
             )
         }
     }

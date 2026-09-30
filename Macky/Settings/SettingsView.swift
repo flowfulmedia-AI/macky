@@ -12,6 +12,7 @@ struct SettingsView: View {
     let openRouterClient: OpenRouterClient
     @ObservedObject var skillLibrary: SkillLibrary
     @ObservedObject var googleAccountManager: GoogleAccountManager
+    @ObservedObject var routineStore: RoutineStore
 
     var body: some View {
         TabView {
@@ -21,6 +22,8 @@ struct SettingsView: View {
                 .tabItem { Label("AI", systemImage: "sparkles") }
             VoiceSettingsTab(settings: settings, session: session)
                 .tabItem { Label("Voce", systemImage: "waveform") }
+            RoutinesSettingsTab(routineStore: routineStore, session: session)
+                .tabItem { Label("Rutine", systemImage: "calendar.badge.clock") }
             ConnectionsSettingsTab(googleAccountManager: googleAccountManager)
                 .tabItem { Label("Conexiuni", systemImage: "link") }
             SkillsSettingsTab(settings: settings, skillLibrary: skillLibrary)
@@ -29,7 +32,7 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
         }
         .padding(16)
-        .frame(minWidth: 620, minHeight: 620)
+        .frame(minWidth: 820, minHeight: 640)
     }
 }
 
@@ -640,5 +643,162 @@ private struct ConnectionsSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Routines
+
+private struct RoutinesSettingsTab: View {
+    @ObservedObject var routineStore: RoutineStore
+    @ObservedObject var session: CompanionSession
+    @State private var selectedIdentifier: UUID?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                List(routineStore.routines, selection: $selectedIdentifier) { routine in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(routine.name).fontWeight(.medium)
+                        Text(routineSummary(routine)).font(.caption2).foregroundColor(.secondary)
+                    }
+                    .opacity(routine.isEnabled ? 1 : 0.5)
+                    .tag(routine.id)
+                }
+                .frame(width: 210)
+                HStack {
+                    Button {
+                        let routine = Routine(name: "Rutină nouă", triggerPhrases: [],
+                                              schedule: RoutineSchedule(isEnabled: false, hour: 9, minute: 0, weekdays: RoutineSchedule.workdays),
+                                              instructions: "")
+                        routineStore.upsert(routine)
+                        selectedIdentifier = routine.id
+                    } label: { Label("Adaugă", systemImage: "plus") }
+                    Menu("…") {
+                        Button("Readaugă exemplele") { routineStore.restoreExamples() }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 30)
+                }
+            }
+            if let routine = routineStore.routines.first(where: { $0.id == selectedIdentifier }) {
+                RoutineEditor(routine: routine, routineStore: routineStore, session: session)
+                    .id(routine.id)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Rutine").font(.headline)
+                    Text("O rutină e ceva ce Macky face la o frază („brief de dimineață”) sau singur, la o oră. Scrii în cuvintele tale ce să facă; Macky folosește calendarul, remindere, Gmail, web, aplicațiile și memoria.")
+                    Text("Alege o rutină din stânga ca s-o modifici.").foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .onAppear { if selectedIdentifier == nil { selectedIdentifier = routineStore.routines.first?.id } }
+    }
+
+    private func routineSummary(_ routine: Routine) -> String {
+        var parts: [String] = []
+        if let phrase = routine.triggerPhrases.first { parts.append("„\(phrase)”") }
+        if routine.schedule.isEnabled { parts.append(routine.schedule.shortDescription) }
+        if !routine.isEnabled { parts.append("oprită") }
+        return parts.isEmpty ? "fără declanșator" : parts.joined(separator: " · ")
+    }
+}
+
+private struct RoutineEditor: View {
+    @State private var draft: Routine
+    @State private var phrasesText: String
+    let routineStore: RoutineStore
+    let session: CompanionSession
+
+    init(routine: Routine, routineStore: RoutineStore, session: CompanionSession) {
+        _draft = State(initialValue: routine)
+        _phrasesText = State(initialValue: routine.triggerPhrases.joined(separator: ", "))
+        self.routineStore = routineStore
+        self.session = session
+    }
+
+    private var timeBinding: Binding<Date> {
+        Binding(
+            get: { Calendar.current.date(bySettingHour: draft.schedule.hour, minute: draft.schedule.minute, second: 0, of: Date()) ?? Date() },
+            set: { newValue in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                draft.schedule.hour = components.hour ?? 9
+                draft.schedule.minute = components.minute ?? 0
+                commit()
+            }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Nume", text: $draft.name, onCommit: commit)
+                Toggle("Activă", isOn: Binding(get: { draft.isEnabled }, set: { draft.isEnabled = $0; commit() }))
+            }
+            Section("Pornește când spui") {
+                TextField("fraze separate prin virgulă, ex. brief de dimineață, briefing", text: $phrasesText, onCommit: commit)
+                Text("Ține apăsat ⌃⌥ și spune fraza. Funcționează doar cererile scurte, ca „brief de dimineață”, nu și întrebările care conțin fraza.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            Section("Pornește singură") {
+                Toggle("La o oră fixă", isOn: Binding(get: { draft.schedule.isEnabled }, set: { draft.schedule.isEnabled = $0; commit() }))
+                if draft.schedule.isEnabled {
+                    DatePicker("Ora", selection: timeBinding, displayedComponents: .hourAndMinute)
+                    HStack(spacing: 4) {
+                        ForEach([(2, "Lu"), (3, "Ma"), (4, "Mi"), (5, "Jo"), (6, "Vi"), (7, "Sâ"), (1, "Du")], id: \.0) { weekday, name in
+                            Toggle(name, isOn: Binding(
+                                get: { draft.schedule.weekdays.contains(weekday) },
+                                set: { isOn in
+                                    if isOn { draft.schedule.weekdays.insert(weekday) } else { draft.schedule.weekdays.remove(weekday) }
+                                    commit()
+                                }
+                            ))
+                            .toggleStyle(.button)
+                        }
+                    }
+                    Text("Dacă Mac-ul doarme la ora respectivă, rutina pornește când îl trezești (în următoarele 2 ore).")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            Section("Ce să facă") {
+                TextEditor(text: $draft.instructions)
+                    .font(.body)
+                    .frame(minHeight: 140)
+                Toggle("Spune rezultatul cu voce", isOn: Binding(get: { draft.speaksResult }, set: { draft.speaksResult = $0; commit() }))
+            }
+            Section {
+                HStack {
+                    Button("Salvează", action: commit)
+                        .keyboardShortcut(.defaultAction)
+                    Button("Rulează acum") {
+                        commit()
+                        session.runRoutineNow(draft)
+                    }
+                    .disabled(draft.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Spacer()
+                    Button("Șterge", role: .destructive) { routineStore.delete(draft.id) }
+                }
+                if let lastRunAt = draft.lastRunAt {
+                    Text("Ultima rulare: \(lastRunAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        draft.triggerPhrases = phrasesText
+            .components(separatedBy: CharacterSet(charactersIn: ",;\n"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        // Keep the latest run time from the store (the scheduler may have run it meanwhile).
+        if let stored = routineStore.routines.first(where: { $0.id == draft.id }) {
+            draft.lastRunAt = stored.lastRunAt
+        } else {
+            return
+        }
+        routineStore.upsert(draft)
     }
 }

@@ -43,6 +43,9 @@ final class CompanionSession: ObservableObject {
     let historyStore: HistoryStore
     let skillLibrary: SkillLibrary
     let googleAccountManager: GoogleAccountManager
+    let routineStore: RoutineStore
+    /// The routine being run, if the current request is one.
+    private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
     /// Set while Macky listens for a reply after answering, without the keys (see `startFollowUpListening`).
     private var followUpListeningIdentifier: UUID?
@@ -87,8 +90,9 @@ final class CompanionSession: ObservableObject {
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
          openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary,
-         googleAccountManager: GoogleAccountManager) {
+         googleAccountManager: GoogleAccountManager, routineStore: RoutineStore) {
         self.memoryManager = memoryManager
+        self.routineStore = routineStore
         self.googleAccountManager = googleAccountManager
         self.skillLibrary = skillLibrary
         self.historyStore = historyStore
@@ -307,6 +311,13 @@ final class CompanionSession: ObservableObject {
                                      interactionIdentifier: UUID) async {
         noteNewRequest(transcript)
         currentRequestWasSpoken = true
+
+        // A routine the user set up ("brief de dimineață", "mod lucru").
+        if let routine = RoutineMatcher.match(transcript, in: routineStore.routines) {
+            routineStore.markRun(routine.id)
+            await runRoutine(routine, interactionIdentifier: interactionIdentifier)
+            return
+        }
 
         // "Agent, caută…" starts a background job right away.
         if settings.actionMode != .disabled, let backgroundGoal = BackgroundTaskTrigger.goal(from: transcript) {
@@ -590,7 +601,40 @@ final class CompanionSession: ObservableObject {
             memoryManager.recordProcedureFailure(lastReplayedProcedureIdentifier)
         }
         lastReplayedProcedureIdentifier = nil
+        runningRoutine = nil
         costAtRequestStart = costTracker.totalCostInCredits
+    }
+
+    // MARK: Routines
+
+    /// Starts a scheduled routine unless Macky is busy (then the scheduler tries again shortly).
+    func startScheduledRoutine(_ routine: Routine) -> Bool {
+        guard !state.isBusy, !audioRecorder.isRecording else { return false }
+        stopEverything()
+        let interactionIdentifier = startNewInteraction()
+        overlayController.beginInteraction(activity: .thinking)
+        state = .thinking
+        noteNewRequest(routine.name)
+        currentRequestWasSpoken = false
+        currentInteractionTask = Task {
+            await runRoutine(routine, interactionIdentifier: interactionIdentifier)
+        }
+        return true
+    }
+
+    /// "Rulează acum" from Settings.
+    func runRoutineNow(_ routine: Routine) {
+        routineStore.markRun(routine.id)
+        _ = startScheduledRoutine(routine)
+    }
+
+    private func runRoutine(_ routine: Routine, interactionIdentifier: UUID) async {
+        runningRoutine = routine
+        overlayController.setBubbleText("Rutina „\(routine.name)”…")
+        let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
+        // Routines work with tools (calendar, mail, apps), not with what is on screen.
+        await answer(question: routine.requestText, capturedScreens: [], frontmostApplication: frontmostApplication,
+                     interactionIdentifier: interactionIdentifier)
     }
 
     /// Replays a learned procedure. Returns false (and the model takes over) when it cannot run or fails.
@@ -844,7 +888,8 @@ final class CompanionSession: ObservableObject {
         var failureReasons: [String] = []
         var taskEndedCleanly = true
         isAnswerStreamComplete = false
-        areActionsApprovedForCurrentQuestion = false
+        // The user set up a routine's actions themselves: no confirmation cards.
+        areActionsApprovedForCurrentQuestion = runningRoutine != nil
 
         agentLoop: for stepNumber in 1...Self.maximumAgentSteps {
             // Only the first response is spoken live (the answer, or the short "Sigur, mă ocup!").
@@ -1002,9 +1047,13 @@ final class CompanionSession: ObservableObject {
         interactionTimings?.workFinishedDate = Date()
         // Answers invite a reply; actions (music, opening apps) do not, unless Macky asked something.
         shouldListenForFollowUp = performedActionDescriptions.isEmpty || finalAnswer.hasSuffix("?")
-        recordInHistory(question: question, answer: finalAnswer, actions: performedActionDescriptions, route: .model)
-        memoryManager.recordExchange(question: question, answer: finalAnswer, actions: performedActionDescriptions, failures: failureReasons)
-        if taskEndedCleanly, memoryManager.recordSuccessfulRun(request: question, toolCalls: executedToolCalls) != nil {
+        if let runningRoutine {
+            recordInHistory(question: "Rutina „\(runningRoutine.name)”", answer: finalAnswer, actions: performedActionDescriptions, route: .routine)
+        } else {
+            recordInHistory(question: question, answer: finalAnswer, actions: performedActionDescriptions, route: .model)
+            memoryManager.recordExchange(question: question, answer: finalAnswer, actions: performedActionDescriptions, failures: failureReasons)
+        }
+        if runningRoutine == nil, taskEndedCleanly, memoryManager.recordSuccessfulRun(request: question, toolCalls: executedToolCalls) != nil {
             // Shown, not spoken: next time this request runs instantly.
             overlayController.setBubbleText((lastAnswerText.isEmpty ? finalAnswer : lastAnswerText) + " ⚡ Am învățat: data viitoare fac asta instant.")
         }
@@ -1330,7 +1379,7 @@ final class CompanionSession: ObservableObject {
     }
 
     private func speak(_ sentence: String) {
-        guard settings.speakResponses else { return }
+        guard settings.speakResponses, runningRoutine?.speaksResult != false else { return }
         speechSpeaker.speak(
             SpeechTextCleaner.cleanForSpeech(sentence),
             voiceIdentifier: settings.speechVoiceIdentifier,

@@ -40,6 +40,18 @@ final class SkillLibrary: ObservableObject {
         unpackArchives()
         lastScannedModificationDate = (try? fileManager.attributesOfItem(atPath: folderURL.path)[.modificationDate]) as? Date
 
+        var foundSkills = Self.skills(in: folderURL)
+        // Claude Code's personal skills are picked up too, unless one with the same name is already here.
+        let claudeCodeFolder = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills", isDirectory: true)
+        for skill in Self.skills(in: claudeCodeFolder) where !foundSkills.contains(where: { $0.name.caseInsensitiveCompare(skill.name) == .orderedSame }) {
+            foundSkills.append(skill)
+        }
+        skills = foundSkills
+        lastError = nil
+    }
+
+    private static func skills(in folderURL: URL) -> [SkillDefinition] {
+        let fileManager = FileManager.default
         var foundSkills: [SkillDefinition] = []
         let entries = (try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
@@ -56,8 +68,7 @@ final class SkillLibrary: ObservableObject {
                 foundSkills.append(skill)
             }
         }
-        skills = foundSkills
-        lastError = nil
+        return foundSkills
     }
 
     func skill(named name: String) -> SkillDefinition? {

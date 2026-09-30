@@ -53,6 +53,8 @@ public enum ScreenAction: Equatable, Sendable {
     case whatsAppRead(chat: String, limit: Int)
     case whatsAppSearch(query: String)
     case whatsAppSend(to: String, text: String)
+    case searchPastChats(query: String)
+    case readPastChat(title: String)
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -176,6 +178,12 @@ public enum ScreenAction: Equatable, Sendable {
         case .whatsAppSend:
             guard let recipient = Self.nonEmptyString(arguments["to"]), let text = Self.nonEmptyString(arguments["text"]) else { return nil }
             self = .whatsAppSend(to: recipient, text: text)
+        case .searchPastChats:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .searchPastChats(query: query)
+        case .readPastChat:
+            guard let title = Self.nonEmptyString(arguments["title"]) else { return nil }
+            self = .readPastChat(title: title)
         case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
@@ -258,6 +266,10 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută în WhatsApp: \(query)"
         case .whatsAppSend(let recipient, let text):
             return "Trimite pe WhatsApp către \(recipient): „\(text.count > 60 ? String(text.prefix(60)) + "…" : text)”"
+        case .searchPastChats(let query):
+            return "Caută în chaturile din Claude și ChatGPT: \(query)"
+        case .readPastChat(let title):
+            return "Citește chatul „\(title)”"
         case .externalTool(let serverName, let toolName, _, _):
             return "\(serverName): \(toolName.replacingOccurrences(of: "_", with: " "))"
         }
@@ -268,7 +280,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat: return true
         default: return false
         }
     }
@@ -286,7 +298,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat: return true
         default: return false
         }
     }
@@ -296,7 +308,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat: return true
         default: return false
         }
     }

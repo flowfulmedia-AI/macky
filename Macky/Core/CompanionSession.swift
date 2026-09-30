@@ -47,6 +47,7 @@ final class CompanionSession: ObservableObject {
     let mcpConnectionStore: MCPConnectionStore
     let zoomMeetingsManager: ZoomMeetingsManager
     let whatsAppController: WhatsAppController
+    let chatArchiveStore = ChatArchiveStore()
     /// The routine being run, if the current request is one.
     private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
@@ -937,6 +938,7 @@ final class CompanionSession: ObservableObject {
                 if tool == .useSkill { return !skills.isEmpty }
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
                 if MackyTool.whatsAppTools.contains(tool) { return whatsAppController.isAvailable }
+                if MackyTool.pastChatTools.contains(tool) { return !chatArchiveStore.isEmpty }
                 return true
             }
         }
@@ -1313,6 +1315,13 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
         case .readDriveFile(let identifier):
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readDriveFile(identifier: identifier))
+        case .searchPastChats(let query):
+            return .done(action.userFacingDescription, resultDetail: chatArchiveStore.search(query))
+        case .readPastChat(let title):
+            guard let text = chatArchiveStore.read(title: title) else {
+                return .failed("No imported Claude or ChatGPT chat or project is called \(title).")
+            }
+            return .done(action.userFacingDescription, resultDetail: text)
         case .whatsAppChats(let unreadOnly, let limit):
             do {
                 return .done(action.userFacingDescription, resultDetail: WhatsAppKit.chatListText(try whatsAppController.chats(unreadOnly: unreadOnly, limit: limit)))
@@ -1441,7 +1450,7 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch:
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat:
             break
         case .whatsAppSend(let recipient, let text):
             do {

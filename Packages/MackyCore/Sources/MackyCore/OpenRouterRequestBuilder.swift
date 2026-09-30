@@ -46,6 +46,9 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case whatsAppRead = "whatsapp_read"
     case whatsAppSearch = "whatsapp_search"
     case whatsAppSend = "whatsapp_send"
+    // Chats imported from the user's Claude and ChatGPT accounts.
+    case searchPastChats = "search_past_chats"
+    case readPastChat = "read_past_chat"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
@@ -64,8 +67,10 @@ public enum MackyTool: String, CaseIterable, Sendable {
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
         .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-        .whatsAppChats, .whatsAppRead, .whatsAppSearch
+        .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat
     ]
+    /// Need an imported Claude or ChatGPT export.
+    public static let pastChatTools: Set<MackyTool> = [.searchPastChats, .readPastChat]
     /// Need WhatsApp to be enabled in Settings.
     public static let whatsAppTools: Set<MackyTool> = [.whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend]
     /// Need a connected Google account.
@@ -340,6 +345,15 @@ public enum OpenRouterRequestBuilder {
             description = "Searches the text of all WhatsApp messages."
             properties = ["query": ["type": "string"]]
             required = ["query"]
+        case .searchPastChats:
+            description = "Searches the user's past conversations from their Claude and ChatGPT accounts (and Claude projects) by words. "
+                + "Use it when the user refers to something discussed or made earlier in Claude or ChatGPT."
+            properties = ["query": ["type": "string", "description": "A few distinctive words, e.g. 'plan lansare curs'."]]
+            required = ["query"]
+        case .readPastChat:
+            description = "Reads one past Claude or ChatGPT conversation, or a Claude project with its instructions and files, by its title."
+            properties = ["title": ["type": "string", "description": "The title from search_past_chats, or a project name."]]
+            required = ["title"]
         case .whatsAppSend:
             description = "Sends a WhatsApp message to a person or a group, by the chat name as shown in WhatsApp or by phone number. "
                 + "Use only when the user asked you to send it (a routine counts). Write it the way the user writes."

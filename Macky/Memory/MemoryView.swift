@@ -5,20 +5,80 @@ import SwiftUI
 struct MemoryView: View {
     @ObservedObject var memoryManager: MemoryManager
     @ObservedObject var settings: AppSettings
+    @State private var tab: Tab = .items
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case items, profile, procedures, settings
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .items: return "Amintiri"
+            case .profile: return "Profil"
+            case .procedures: return "Proceduri învățate"
+            case .settings: return "Setări"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .items: return "brain"
+            case .profile: return "person.crop.circle"
+            case .procedures: return "bolt"
+            case .settings: return "slider.horizontal.3"
+            }
+        }
+    }
 
     var body: some View {
-        TabView {
-            MemoryItemsTab(memoryManager: memoryManager)
-                .tabItem { Label("Amintiri", systemImage: "brain") }
-            MemoryProfileTab(memoryManager: memoryManager)
-                .tabItem { Label("Profil", systemImage: "person.crop.circle") }
-            ProceduresTab(memoryManager: memoryManager)
-                .tabItem { Label("Proceduri învățate", systemImage: "bolt") }
-            MemorySettingsTab(memoryManager: memoryManager, settings: settings)
-                .tabItem { Label("Setări", systemImage: "slider.horizontal.3") }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                MackyMascotView(mood: .happy, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Memoria lui Macky").font(MackyDesign.rounded(22, .bold)).foregroundColor(MackyDesign.textPrimary)
+                    Text("Ce știe despre tine, ce a învățat și cum folosește memoria.")
+                        .font(MackyDesign.rounded(13))
+                        .foregroundColor(MackyDesign.textSecondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 6) {
+                ForEach(Tab.allCases) { item in
+                    Button {
+                        tab = item
+                    } label: {
+                        Label(item.title, systemImage: item.symbol)
+                            .font(MackyDesign.rounded(13, .semibold))
+                            .foregroundColor(tab == item ? MackyDesign.textPrimary : MackyDesign.textSecondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(tab == item ? MackyDesign.surfaceStrong : Color.clear))
+                            .overlay(Capsule().stroke(tab == item ? MackyDesign.hairline : Color.clear, lineWidth: 1))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandOnHover()
+                }
+                Spacer()
+            }
+            .padding(4)
+            .background(Capsule().fill(MackyDesign.surface))
+
+            Group {
+                switch tab {
+                case .items: MemoryItemsTab(memoryManager: memoryManager)
+                case .profile: MemoryProfileTab(memoryManager: memoryManager)
+                case .procedures: ProceduresTab(memoryManager: memoryManager)
+                case .settings: MemorySettingsTab(memoryManager: memoryManager, settings: settings)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding()
-        .frame(minWidth: 520, minHeight: 420)
+        .padding(.horizontal, 28)
+        .padding(.top, 38)
+        .padding(.bottom, 20)
+        .background(MackyDesign.windowBackground)
+        .environment(\.colorScheme, .dark)
+        .toggleStyle(MackyToggleStyle())
+        .frame(minWidth: 640, minHeight: 480)
     }
 }
 
@@ -47,21 +107,31 @@ private struct MemoryItemsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                TextField("Caută în memorie…", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundColor(MackyDesign.textSecondary)
+                    TextField("Caută în memorie…", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(MackyDesign.rounded(13))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(MackyDesign.hairline, lineWidth: 1))
+                .frame(maxWidth: .infinity)
                 Picker("", selection: $kindFilter) {
                     Text("Toate").tag(MemoryKind?.none)
                     ForEach(MemoryKind.allCases, id: \.self) { kind in
                         Text(kind.displayName).tag(MemoryKind?.some(kind))
                     }
                 }
-                .frame(width: 190)
+                .settingsMenu()
                 Button {
                     isAddingItem = true
                 } label: {
                     Label("Adaugă", systemImage: "plus")
                 }
+                .buttonStyle(MackyPrimaryPillStyle())
             }
             if memoryManager.items.isEmpty {
                 Spacer()
@@ -71,8 +141,19 @@ private struct MemoryItemsTab: View {
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                List(visibleItems) { item in
-                    row(for: item)
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(visibleItems) { item in
+                            row(for: item)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.055))
+                                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MackyDesign.hairline, lineWidth: 1))
+                                )
+                        }
+                    }
                 }
             }
             Text("\(memoryManager.items.count) amintiri · Macky primește doar cele relevante pentru fiecare cerere, ca să coste puțin.")
@@ -98,15 +179,18 @@ private struct MemoryItemsTab: View {
                     if item.isPinned {
                         Image(systemName: "pin.fill").font(.caption).foregroundColor(MackyDesign.accent)
                     }
-                    Text(item.subject).fontWeight(.semibold)
+                    Text(item.subject).font(MackyDesign.rounded(14, .semibold)).foregroundColor(MackyDesign.textPrimary)
                     Text(item.kind.displayName)
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(MackyDesign.cardBackground))
+                        .font(MackyDesign.rounded(11, .semibold))
+                        .foregroundColor(MackyDesign.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(MackyDesign.surfaceStrong))
                 }
                 Text(item.content)
-                    .font(.callout)
+                    .font(MackyDesign.rounded(13))
+                    .foregroundColor(MackyDesign.textPrimary.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 Text(detailLine(for: item))
                     .font(.caption2)
@@ -249,7 +333,9 @@ private struct ProceduresTab: View {
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                List(memoryManager.procedureBook.procedures.sorted { $0.useCount > $1.useCount }) { procedure in
+                ScrollView {
+                LazyVStack(spacing: 8) {
+                ForEach(memoryManager.procedureBook.procedures.sorted { $0.useCount > $1.useCount }) { procedure in
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("„\(procedure.exampleRequest)”").fontWeight(.semibold)
@@ -265,12 +351,19 @@ private struct ProceduresTab: View {
                             get: { procedure.isEnabled },
                             set: { memoryManager.setProcedureEnabled($0, identifier: procedure.id) }
                         ))
-                        .toggleStyle(.switch)
                         .labelsHidden()
                         Button { memoryManager.deleteProcedure(procedure.id) } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                     }
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.055))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MackyDesign.hairline, lineWidth: 1))
+                    )
+                }
+                }
                 }
             }
             Text("În curs de învățare: \(memoryManager.procedureBook.candidates.count) cereri văzute o dată.")
@@ -292,41 +385,54 @@ private struct MemorySettingsTab: View {
     @State private var isConfirmingDeletion = false
 
     var body: some View {
-        Form {
-            Section("Memorie") {
-                Toggle("Memorie pe termen lung (învață din conversații)", isOn: $settings.memoryEnabled)
-                Toggle("Învață proceduri (repetă instant cererile rezolvate de două ori)", isOn: $settings.learnedProceduresEnabled)
-                Text("Învățarea folosește modelul „Rapid”, rar și în loturi: de obicei sub un cent pe zi.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            Section("Stare") {
-                LabeledContent("Amintiri", value: "\(memoryManager.items.count)")
-                LabeledContent("Lecții învățate", value: "\(memoryManager.items.filter { $0.kind == .lesson }.count)")
-                LabeledContent("Proceduri", value: "\(memoryManager.procedureBook.procedures.filter(\.isEnabled).count)")
-                LabeledContent("Cereri rezolvate fără model", value: "\(memoryManager.requestsAnsweredWithoutModel)")
-                LabeledContent("Căutare după sens", value: memoryManager.usesMeaningSearch ? "activă (model Apple, local)" : "doar cuvinte-cheie")
-                HStack {
-                    Text("Conversații care așteaptă să fie învățate: \(memoryManager.pendingExchangeCount)")
-                    Spacer()
-                    Button(memoryManager.isLearning ? "Învață…" : "Învață acum") {
-                        Task { await memoryManager.curatePendingExchanges() }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                SettingsGroup(title: "Memorie", footer: "Învățarea folosește modelul „Rapid”, rar și în loturi: de obicei sub un cent pe zi.") {
+                    SettingsRow(title: "Memorie pe termen lung", subtitle: "Învață din conversații ce contează despre tine.") {
+                        Toggle("", isOn: $settings.memoryEnabled).labelsHidden()
                     }
-                    .disabled(memoryManager.isLearning || memoryManager.pendingExchangeCount == 0)
+                    SettingsDivider()
+                    SettingsRow(title: "Învață proceduri", subtitle: "Repetă instant cererile rezolvate de două ori.") {
+                        Toggle("", isOn: $settings.learnedProceduresEnabled).labelsHidden()
+                    }
+                }
+                SettingsGroup(title: "Stare") {
+                    stateRow("Amintiri", "\(memoryManager.items.count)")
+                    SettingsDivider()
+                    stateRow("Lecții învățate", "\(memoryManager.items.filter { $0.kind == .lesson }.count)")
+                    SettingsDivider()
+                    stateRow("Proceduri", "\(memoryManager.procedureBook.procedures.filter(\.isEnabled).count)")
+                    SettingsDivider()
+                    stateRow("Cereri rezolvate fără model", "\(memoryManager.requestsAnsweredWithoutModel)")
+                    SettingsDivider()
+                    stateRow("Căutare după sens", memoryManager.usesMeaningSearch ? "activă (model Apple, local)" : "doar cuvinte-cheie")
+                    SettingsDivider()
+                    SettingsRow(title: "Conversații de învățat", subtitle: "\(memoryManager.pendingExchangeCount) așteaptă") {
+                        Button(memoryManager.isLearning ? "Învață…" : "Învață acum") {
+                            Task { await memoryManager.curatePendingExchanges() }
+                        }
+                        .buttonStyle(MackySecondaryPillStyle())
+                        .disabled(memoryManager.isLearning || memoryManager.pendingExchangeCount == 0)
+                    }
+                }
+                SettingsGroup(title: "Date", footer: "Totul stă doar pe Mac-ul tău, în ~/Library/Application Support/Macky (memory.json, procedures.json).") {
+                    SettingsRow(title: "Șterge toată memoria", subtitle: "Amintirile, profilul și procedurile se pierd definitiv.") {
+                        Button("Șterge…", role: .destructive) { isConfirmingDeletion = true }
+                            .buttonStyle(MackySecondaryPillStyle())
+                    }
                 }
             }
-            Section("Date") {
-                Text("Totul stă doar pe Mac-ul tău, în ~/Library/Application Support/Macky (memory.json, procedures.json).")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Button("Șterge toată memoria…", role: .destructive) { isConfirmingDeletion = true }
-            }
         }
-        .formStyle(.grouped)
         .confirmationDialog("Ștergi tot ce știe Macky despre tine?", isPresented: $isConfirmingDeletion) {
             Button("Șterge tot", role: .destructive) { memoryManager.deleteEverything() }
         } message: {
             Text("Amintirile, profilul și procedurile învățate se pierd definitiv.")
+        }
+    }
+
+    private func stateRow(_ title: String, _ value: String) -> some View {
+        SettingsRow(title: title) {
+            Text(value).font(MackyDesign.rounded(13, .semibold)).foregroundColor(MackyDesign.textSecondary)
         }
     }
 }

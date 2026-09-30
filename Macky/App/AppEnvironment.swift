@@ -252,7 +252,7 @@ final class AppEnvironment {
 
     private func openMemory() {
         hidePanels()
-        _ = windowCoordinator.showWindow(identifier: "memory", title: "Memoria lui Macky", size: NSSize(width: 820, height: 640)) {
+        _ = windowCoordinator.showWindow(identifier: "memory", title: "Memoria lui Macky", size: NSSize(width: 860, height: 680), transparentTitleBar: true) {
             MemoryView(memoryManager: memoryManager, settings: settings)
         }
     }

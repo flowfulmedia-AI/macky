@@ -2,13 +2,14 @@ import AVFoundation
 import MackyCore
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Macky's settings: a sidebar grouped by topic and one clean page per topic.
 struct SettingsView: View {
     enum Page: String, CaseIterable, Identifiable {
         case general, voice, shortcuts, conversation, screen
         case model, memory, skills
-        case google, whatsApp, zoom, apps, spotify
+        case aiAccounts, google, whatsApp, zoom, apps, spotify
         case routines
 
         var id: String { rawValue }
@@ -23,6 +24,7 @@ struct SettingsView: View {
             case .model: return "Model AI"
             case .memory: return "Memorie"
             case .skills: return "Skills"
+            case .aiAccounts: return "Claude și ChatGPT"
             case .google: return "Gmail și Drive"
             case .whatsApp: return "WhatsApp"
             case .zoom: return "Zoom"
@@ -42,6 +44,7 @@ struct SettingsView: View {
             case .model: return "sparkles"
             case .memory: return "brain.head.profile"
             case .skills: return "wand.and.stars"
+            case .aiAccounts: return "text.bubble.fill"
             case .google: return "envelope.fill"
             case .whatsApp: return "message.fill"
             case .zoom: return "video.fill"
@@ -54,7 +57,7 @@ struct SettingsView: View {
         static let groups: [(title: String, pages: [Page])] = [
             ("Macky", [.general, .voice, .shortcuts, .conversation, .screen]),
             ("Inteligență", [.model, .memory, .skills]),
-            ("Conexiuni", [.google, .whatsApp, .zoom, .apps, .spotify]),
+            ("Conexiuni", [.aiAccounts, .google, .whatsApp, .zoom, .apps, .spotify]),
             ("Automatizări", [.routines])
         ]
     }
@@ -161,6 +164,7 @@ struct SettingsView: View {
         case .google: return googleAccountManager.isConnected ? MackyDesign.accent : nil
         case .zoom: return zoomMeetingsManager.hasCredentials ? MackyDesign.accent : nil
         case .whatsApp: return whatsAppController.isAvailable ? MackyDesign.accent : nil
+        case .aiAccounts: return session.chatArchiveStore.isEmpty ? nil : MackyDesign.accent
         case .spotify: return spotifyCredentialsStore.hasCredentials ? MackyDesign.accent : nil
         case .model: return apiKeyStore.hasAPIKey ? nil : .orange
         default: return nil
@@ -179,6 +183,7 @@ struct SettingsView: View {
                                openRouterClient: openRouterClient, openCalibration: openCalibration)
         case .memory: MemorySettingsPage(settings: settings, memoryManager: memoryManager, openMemory: openMemory, openHistory: openHistory)
         case .skills: SkillsPage(settings: settings, skillLibrary: skillLibrary)
+        case .aiAccounts: AIAccountsPage(store: session.chatArchiveStore, skillLibrary: skillLibrary)
         case .google: GooglePage(googleAccountManager: googleAccountManager)
         case .whatsApp: WhatsAppPage(settings: settings, controller: whatsAppController)
         case .zoom: ZoomPage(manager: zoomMeetingsManager, googleConnected: googleAccountManager.isConnected)
@@ -758,6 +763,110 @@ private struct SkillsPage: View {
         if panel.runModal() == .OK, let url = panel.url {
             settings.skillsFolderPath = url.path
             skillLibrary.reload()
+        }
+    }
+}
+
+// MARK: - Claude and ChatGPT
+
+private struct AIAccountsPage: View {
+    @ObservedObject var store: ChatArchiveStore
+    @ObservedObject var skillLibrary: SkillLibrary
+
+    var body: some View {
+        SettingsPage(title: "Claude și ChatGPT",
+                     subtitle: "Adu în Macky conversațiile, proiectele și skill-urile din conturile tale, ca să le poată căuta, continua și folosi pentru agenți.") {
+            SettingsGroup(title: "Conversații", footer: "Claude și ChatGPT nu permit altor aplicații să citească direct conturile, așa că folosim exportul oficial de date. Totul rămâne doar pe Mac-ul tău. Poți reimporta oricând un export nou: conversațiile se actualizează, nu se dublează.") {
+                accountRow(.claude, steps: "claude.ai → Settings → Privacy → Export data. Primești pe email un link către o arhivă .zip.")
+                SettingsDivider()
+                accountRow(.chatGPT, steps: "chatgpt.com → Settings → Data controls → Export data. Primești pe email o arhivă .zip.")
+                SettingsDivider()
+                SettingsBlock {
+                    HStack {
+                        Button(store.isImporting ? "Import…" : "Importă arhiva (.zip)") { chooseExport() }
+                            .buttonStyle(MackyPrimaryPillStyle())
+                            .disabled(store.isImporting)
+                        Spacer()
+                    }
+                    if let statusText = store.statusText { SettingsMessage(text: statusText) }
+                    Text("Apoi îi poți spune: „ce am discutat cu Claude despre lansarea cursului?” sau „continuă planul din ChatGPT despre reclame”.")
+                        .font(MackyDesign.rounded(12))
+                        .foregroundColor(MackyDesign.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            SettingsGroup(title: "Proiecte Claude (\(store.projects.count))",
+                          footer: "Vin din exportul Claude. „Fă skill” transformă instrucțiunile și fișierele proiectului într-un skill pe care Macky îl folosește la cerere; e primul pas spre agenți.") {
+                if store.projects.isEmpty {
+                    SettingsBlock { SettingsMessage(text: "Niciun proiect importat încă.") }
+                }
+                ForEach(Array(store.projects.enumerated()), id: \.element.id) { index, project in
+                    if index > 0 { SettingsDivider() }
+                    SettingsRow(title: project.name,
+                                subtitle: project.summary.isEmpty ? "\(project.documents.count) fișiere" : project.summary) {
+                        let isSkill = skillLibrary.skills.contains { $0.name.caseInsensitiveCompare(project.name) == .orderedSame }
+                        Button(isSkill ? "E skill ✓" : "Fă skill") {
+                            if store.makeSkill(from: project, in: skillLibrary.folderURL) { skillLibrary.reload() }
+                        }
+                        .buttonStyle(MackySecondaryPillStyle())
+                        .disabled(isSkill)
+                    }
+                }
+            }
+
+            SettingsGroup(title: "Skill-uri din Claude", footer: "Skill-urile din contul Claude nu se pot descărca automat. Le iei o singură dată, apoi Macky le vede pe toate.") {
+                SettingsBlock {
+                    SettingsSteps(steps: [
+                        "claude.ai → Settings → Capabilities → Skills.",
+                        "La fiecare skill al tău: „…” → Download (primești un .zip).",
+                        "Pune arhivele în folderul de skills al lui Macky (Setări → Skills → Deschide folderul). Se dezarhivează singure.",
+                        "Skill-urile din Claude Code (~/.claude/skills) le vede automat."
+                    ])
+                    HStack {
+                        Button("Deschide folderul de skills") {
+                            skillLibrary.reload()
+                            NSWorkspace.shared.open(skillLibrary.folderURL)
+                        }
+                        .buttonStyle(MackySecondaryPillStyle())
+                        Spacer()
+                        Text("\(skillLibrary.skills.count) skill-uri găsite")
+                            .font(MackyDesign.rounded(12, .semibold))
+                            .foregroundColor(MackyDesign.textSecondary)
+                    }
+                }
+            }
+        }
+        .onAppear { skillLibrary.reload() }
+    }
+
+    private func accountRow(_ source: ChatArchiveKit.Source, steps: String) -> some View {
+        let count = store.chatCount(for: source)
+        return SettingsRow(title: source.displayName, subtitle: steps) {
+            VStack(alignment: .trailing, spacing: 6) {
+                StatusBadge(isOn: count > 0, text: count > 0 ? "\(count) conversații" : "Neimportat")
+                if count > 0 {
+                    Button("Șterge") { Task { await store.removeAll(from: source) } }
+                        .buttonStyle(.plain)
+                        .font(MackyDesign.rounded(11))
+                        .foregroundColor(MackyDesign.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func chooseExport() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.zip, .json, .folder]
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.message = "Alege arhiva exportată din Claude sau ChatGPT"
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        Task {
+            for url in urls { await store.importExport(from: url) }
         }
     }
 }

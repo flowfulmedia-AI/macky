@@ -62,15 +62,24 @@ enum KeychainStore {
         let secretKey = key(service: service, account: account)
         var secrets = loadedSecrets()
         if let value = secrets[secretKey] { return value }
-        // Moves a secret saved by an older version out of the Keychain, once.
-        let migratedMarker = secretKey + "|checked-keychain"
+        // Moves a secret saved by an older version out of the Keychain. Marked as done only when it was
+        // moved or truly is not there: if the password prompt was cancelled, it asks again next launch.
+        let migratedMarker = secretKey + Self.checkedMarkerSuffix
         guard secrets[migratedMarker] == nil else { return nil }
-        let legacyValue = readLegacyKeychainString(service: service, account: account)
-        if let legacyValue { secrets[secretKey] = legacyValue }
-        secrets[migratedMarker] = "1"
-        try? persist(secrets)
-        return legacyValue
+        let legacyRead = readLegacyKeychainString(service: service, account: account)
+        if let value = legacyRead.value {
+            secrets[secretKey] = value
+            secrets[migratedMarker] = "1"
+            try? persist(secrets)
+        } else if legacyRead.status == errSecItemNotFound {
+            secrets[migratedMarker] = "1"
+            try? persist(secrets)
+        }
+        return legacyRead.value
     }
+
+    /// "-v2": the first version also marked secrets whose password prompt was cancelled, so they were never moved.
+    private static let checkedMarkerSuffix = "|checked-keychain-v2"
 
     static func writeString(_ value: String, service: String, account: String) throws {
         lock.lock()
@@ -87,11 +96,11 @@ enum KeychainStore {
         let secretKey = key(service: service, account: account)
         secrets[secretKey] = nil
         // Do not look in the Keychain again for something deliberately removed.
-        secrets[secretKey + "|checked-keychain"] = "1"
+        secrets[secretKey + Self.checkedMarkerSuffix] = "1"
         try? persist(secrets)
     }
 
-    private static func readLegacyKeychainString(service: String, account: String) -> String? {
+    private static func readLegacyKeychainString(service: String, account: String) -> (value: String?, status: OSStatus) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -100,11 +109,11 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else {
-            return nil
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            return (nil, status)
         }
-        return String(data: data, encoding: .utf8)
+        return (String(data: data, encoding: .utf8), status)
     }
 }
 

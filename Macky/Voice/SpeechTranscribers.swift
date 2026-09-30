@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import MackyCore
 import Speech
 import WhisperKit
 

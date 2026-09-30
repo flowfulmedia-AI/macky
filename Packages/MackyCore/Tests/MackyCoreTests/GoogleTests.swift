@@ -8,7 +8,7 @@ final class GoogleTests: XCTestCase {
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         XCTAssertEqual(value("code_challenge_method"), "S256")
         XCTAssertEqual(value("access_type"), "offline")
-        XCTAssertEqual(value("scope"), "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.readonly")
+        XCTAssertEqual(value("scope"), "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file")
         let body = String(data: GoogleOAuth.authorizationCodeRequestBody(code: "4/a b", clientIdentifier: "id", clientSecret: "s", redirectURI: "http://127.0.0.1:5000", codeVerifier: "v"), encoding: .utf8)!
         XCTAssertTrue(body.contains("code=4%2Fa%20b"))
         XCTAssertTrue(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5000"))

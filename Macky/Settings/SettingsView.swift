@@ -839,7 +839,23 @@ private struct MCPServerRow: View {
                     .frame(minHeight: 60)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
                 HStack {
-                    SecureField(store.hasToken(for: draft.id) ? "Token salvat (scrie altul ca să-l schimbi)" : "Token / cheie API (doar dacă serverul cere)", text: $token)
+                    if store.isSignedIn(draft.id) {
+                        Label("Conectat prin login", systemImage: "checkmark.seal.fill").foregroundColor(.green)
+                        Spacer()
+                        Button("Deconectează") { store.signOut(draft.id) }
+                    } else {
+                        Text("Serverele cu login (ex. Flowts) se conectează din browser, o singură dată.")
+                            .font(.caption).foregroundColor(.secondary)
+                        Spacer()
+                        Button(store.signingInServers.contains(draft.id) ? "Aștept aprobarea…" : "Conectează (login)") {
+                            store.upsert(draft)
+                            Task { await store.signIn(draft.id) }
+                        }
+                        .disabled(store.signingInServers.contains(draft.id))
+                    }
+                }
+                HStack {
+                    SecureField(store.hasToken(for: draft.id) ? "Token salvat (scrie altul ca să-l schimbi)" : "Sau token / cheie API, dacă serverul folosește așa ceva", text: $token)
                     TextField("Header", text: $draft.authorizationHeaderName)
                         .frame(width: 130)
                         .help("„Authorization” trimite „Bearer <token>”; altfel tokenul se trimite exact în header-ul ales (ex. x-api-key).")

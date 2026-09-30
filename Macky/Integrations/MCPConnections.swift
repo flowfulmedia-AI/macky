@@ -18,6 +18,7 @@ struct MCPServerConfiguration: Codable, Identifiable, Equatable {
 final class MCPClient {
     private(set) var configuration: MCPServerConfiguration
     private let token: String?
+    private let authorizer: MCPOAuthAuthorizer
     private var sessionIdentifier: String?
     private var isInitialized = false
     private var nextRequestIdentifier = 1
@@ -29,9 +30,10 @@ final class MCPClient {
         return URLSession(configuration: configuration)
     }()
 
-    init(configuration: MCPServerConfiguration, token: String?) {
+    init(configuration: MCPServerConfiguration, token: String?, authorizer: MCPOAuthAuthorizer) {
         self.configuration = configuration
         self.token = token
+        self.authorizer = authorizer
     }
 
     func loadTools() async throws -> [MCPToolDescriptor] {
@@ -65,10 +67,13 @@ final class MCPClient {
     }
 
     /// Sends a request and returns its result. A server that forgot the session (404) gets a fresh one, once.
-    private func request(allowsSessionRestart: Bool = true, _ makeBody: (Int) -> Data) async throws -> [String: Any] {
+    private func request(allowsSessionRestart: Bool = true, allowsTokenRefresh: Bool = true, _ makeBody: (Int) -> Data) async throws -> [String: Any] {
         let identifier = nextRequestIdentifier
         nextRequestIdentifier += 1
         let (data, response) = try await send(makeBody(identifier))
+        if response.statusCode == 401, allowsTokenRefresh, authorizer.isSignedIn, await authorizer.refresh() {
+            return try await request(allowsSessionRestart: allowsSessionRestart, allowsTokenRefresh: false, makeBody)
+        }
         if response.statusCode == 404, allowsSessionRestart, sessionIdentifier != nil {
             isInitialized = false
             try await ensureInitialized()
@@ -78,7 +83,7 @@ final class MCPClient {
         case 200..<300:
             break
         case 401, 403:
-            throw MCPProtocol.RPCError(message: "\(configuration.name) cere autentificare (HTTP \(response.statusCode)). Adaugă tokenul în Setări → Conexiuni.")
+            throw MCPAuthorizationRequired(serverName: configuration.name, wwwAuthenticateHeader: response.value(forHTTPHeaderField: "WWW-Authenticate"))
         default:
             let detail = String(decoding: data.prefix(300), as: UTF8.self)
             throw MCPProtocol.RPCError(message: "\(configuration.name) a răspuns HTTP \(response.statusCode). \(detail)")
@@ -101,7 +106,9 @@ final class MCPClient {
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         if isInitialized { request.setValue(MCPProtocol.protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version") }
         if let sessionIdentifier { request.setValue(sessionIdentifier, forHTTPHeaderField: "Mcp-Session-Id") }
-        if let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
+        if let accessToken = await authorizer.accessToken() {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        } else if let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             let headerName = configuration.authorizationHeaderName.isEmpty ? "Authorization" : configuration.authorizationHeaderName
             let needsBearerPrefix = headerName.lowercased() == "authorization" && !token.lowercased().hasPrefix("bearer ")
             request.setValue(needsBearerPrefix ? "Bearer \(token)" : token, forHTTPHeaderField: headerName)
@@ -112,6 +119,13 @@ final class MCPClient {
         }
         return (data, httpResponse)
     }
+}
+
+/// The server wants the user to sign in (OAuth) or a token.
+struct MCPAuthorizationRequired: LocalizedError {
+    var serverName: String
+    var wwwAuthenticateHeader: String?
+    var errorDescription: String? { "\(serverName) cere autentificare: apasă „Conectează (login)”." }
 }
 
 /// The user's connected apps, their tokens (in the Keychain) and their tools, ready to offer to the model.
@@ -125,6 +139,10 @@ final class MCPConnectionStore: ObservableObject {
     @Published private(set) var servers: [MCPServerConfiguration] = []
     @Published private(set) var statusByServer: [UUID: String] = [:]
     @Published private(set) var toolNamesByServer: [UUID: [String]] = [:]
+    /// Servers that answered "sign in first", with the header that says where.
+    @Published private(set) var loginRequiredByServer: [UUID: String] = [:]
+    @Published private(set) var signingInServers: Set<UUID> = []
+    private var authorizers: [UUID: MCPOAuthAuthorizer] = [:]
 
     private var clients: [UUID: MCPClient] = [:]
     private var refreshingServers: Set<UUID> = []
@@ -160,6 +178,8 @@ final class MCPConnectionStore: ObservableObject {
         servers.removeAll { $0.id == identifier }
         clients[identifier] = nil
         KeychainStore.delete(service: Self.keychainService, account: identifier.uuidString)
+        authorizer(for: identifier).signOut()
+        authorizers[identifier] = nil
         statusByServer[identifier] = nil
         toolNamesByServer[identifier] = nil
         save()
@@ -188,9 +208,46 @@ final class MCPConnectionStore: ObservableObject {
 
     // MARK: Tools
 
+    private func authorizer(for identifier: UUID) -> MCPOAuthAuthorizer {
+        if let authorizer = authorizers[identifier] { return authorizer }
+        let authorizer = MCPOAuthAuthorizer(serverIdentifier: identifier)
+        authorizers[identifier] = authorizer
+        return authorizer
+    }
+
+    func isSignedIn(_ identifier: UUID) -> Bool {
+        authorizer(for: identifier).isSignedIn
+    }
+
+    /// Opens the browser to approve Macky, then loads the tools.
+    func signIn(_ identifier: UUID) async {
+        guard let server = servers.first(where: { $0.id == identifier }),
+              let mcpURL = URL(string: server.url.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        signingInServers.insert(identifier)
+        defer { signingInServers.remove(identifier) }
+        statusByServer[identifier] = "Aprobă accesul în browser…"
+        do {
+            try await authorizer(for: identifier).signIn(mcpURL: mcpURL, wwwAuthenticateHeader: loginRequiredByServer[identifier])
+            loginRequiredByServer[identifier] = nil
+            clients[identifier] = nil
+            await refreshTools(for: identifier)
+        } catch {
+            statusByServer[identifier] = "Login eșuat: \(error.localizedDescription)"
+        }
+    }
+
+    func signOut(_ identifier: UUID) {
+        authorizer(for: identifier).signOut()
+        clients[identifier] = nil
+        toolNamesByServer[identifier] = nil
+        statusByServer[identifier] = "Deconectat."
+        objectWillChange.send()
+    }
+
     private func client(for server: MCPServerConfiguration) -> MCPClient {
         if let client = clients[server.id], client.configuration == server { return client }
-        let client = MCPClient(configuration: server, token: KeychainStore.readString(service: Self.keychainService, account: server.id.uuidString))
+        let client = MCPClient(configuration: server, token: KeychainStore.readString(service: Self.keychainService, account: server.id.uuidString),
+                               authorizer: authorizer(for: server.id))
         clients[server.id] = client
         return client
     }
@@ -204,7 +261,11 @@ final class MCPConnectionStore: ObservableObject {
         do {
             let tools = try await client(for: server).loadTools()
             toolNamesByServer[identifier] = tools.map(\.name)
+            loginRequiredByServer[identifier] = nil
             statusByServer[identifier] = tools.isEmpty ? "Conectat, dar serverul nu are unelte." : "Conectat · \(tools.count) unelte"
+        } catch let authorizationRequired as MCPAuthorizationRequired {
+            loginRequiredByServer[identifier] = authorizationRequired.wwwAuthenticateHeader ?? ""
+            statusByServer[identifier] = "Cere login: apasă „Conectează (login)”."
         } catch {
             statusByServer[identifier] = "Eroare: \(error.localizedDescription)"
         }

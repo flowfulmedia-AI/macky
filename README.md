@@ -33,6 +33,8 @@ Inspirat de HeyClicky, construit pentru uz personal și fără costuri fixe:
 - **Asistent de scris**: selectează text în orice aplicație și spune „rescrie mai formal”, „tradu”, „corectează”. Folosește skill-urile tale din Claude (Setări → Skills).
 - **Fișiere, Gmail, Google Drive**: „găsește contractul Nordic”, „ce mi-a scris Andrei ieri?”. Doar citire (Setări → Conexiuni).
 - **Web**: răspunde cu informații actuale de pe internet.
+- **Meetinguri Zoom → Drive**: fiecare meeting înregistrat în cloud e transcris, rezumat (decizii, acțiuni) și salvat ca Google Doc (Setări → Conexiuni → Zoom).
+- **„Fă task din asta”**: din orice mail, pagină sau mesaj de pe ecran, Macky creează taskul (în Flowts sau Reminders) cu detaliile și linkul.
 - **Aplicațiile tale (MCP)**: Macky se conectează la servere MCP (ex. Flowts) și poate citi și modifica direct taskuri, notițe etc. (Setări → Conexiuni).
 - **Rutine**: „brief de dimineață”, „mod lucru”, la o frază sau la o oră fixă, editabile în Setări → Rutine.
 - **Întrerupere**: o nouă apăsare oprește imediat răspunsul curent.

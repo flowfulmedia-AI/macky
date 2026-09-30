@@ -116,6 +116,7 @@ struct HistoryView: View {
         case .procedure: return "bolt.fill"
         case .backgroundAgent: return "person.crop.circle.badge.clock"
         case .routine: return "calendar.badge.clock"
+        case .meeting: return "video"
         }
     }
 
@@ -126,6 +127,7 @@ struct HistoryView: View {
         case .procedure: return "procedură învățată"
         case .backgroundAgent: return "agent în fundal"
         case .routine: return "rutină"
+        case .meeting: return "meeting Zoom"
         }
     }
 }

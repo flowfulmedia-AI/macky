@@ -198,20 +198,62 @@ final class GoogleAccountManager: ObservableObject {
     }
 
     private func authorizedData(from url: URL, allowRetry: Bool = true) async throws -> Data {
-        var request = URLRequest(url: url)
+        try await authorizedData(for: URLRequest(url: url), allowRetry: allowRetry)
+    }
+
+    private func authorizedData(for originalRequest: URLRequest, allowRetry: Bool = true) async throws -> Data {
+        var request = originalRequest
         request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
         let (data, response) = try await urlSession.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         if statusCode == 401 && allowRetry {
             accessToken = nil
-            return try await authorizedData(from: url, allowRetry: false)
+            return try await authorizedData(for: originalRequest, allowRetry: false)
         }
         guard (200..<300).contains(statusCode) else {
             let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
                 .flatMap { ($0["error"] as? [String: Any])?["message"] as? String } ?? "HTTP \(statusCode)"
+            if statusCode == 403 && message.lowercased().contains("insufficient") {
+                throw GoogleOAuth.OAuthError(message: "Google nu i-a dat lui Macky voie să salveze în Drive. Apasă Deconectează, apoi Conectează Google din nou în Setări → Conexiuni.")
+            }
             throw GoogleOAuth.OAuthError(message: "Google: \(message)")
         }
         return data
+    }
+
+    // MARK: Drive upload
+
+    /// Saves an HTML document as a Google Doc in a folder Macky creates (and remembers). Returns the doc's link.
+    func uploadGoogleDoc(named name: String, html: String, folderName: String) async throws -> String {
+        let folderIdentifier = try await folderIdentifier(named: folderName)
+        let upload = DriveUpload.multipartBody(name: name, targetMimeType: "application/vnd.google-apps.document",
+                                               parentFolderIdentifier: folderIdentifier, content: Data(html.utf8), contentMimeType: "text/html")
+        var request = URLRequest(url: DriveUpload.uploadURL)
+        request.httpMethod = "POST"
+        request.setValue(upload.contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = upload.body
+        guard let created = DriveUpload.parseCreatedFile(try await authorizedData(for: request)) else {
+            throw GoogleOAuth.OAuthError(message: "Drive nu a confirmat documentul.")
+        }
+        return created.link ?? "https://docs.google.com/document/d/\(created.identifier)"
+    }
+
+    private func folderIdentifier(named folderName: String) async throws -> String {
+        let defaultsKey = "googleDriveFolder|" + folderName
+        if let savedIdentifier = UserDefaults.standard.string(forKey: defaultsKey),
+           let data = try? await authorizedData(from: DriveAPI.metadataURL(identifier: savedIdentifier)),
+           !DriveAPI.parseFiles(data).isEmpty {
+            return savedIdentifier
+        }
+        var request = URLRequest(url: DriveUpload.filesURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = DriveUpload.folderMetadata(name: folderName)
+        guard let created = DriveUpload.parseCreatedFile(try await authorizedData(for: request)) else {
+            throw GoogleOAuth.OAuthError(message: "Nu am putut crea folderul „\(folderName)” în Drive.")
+        }
+        UserDefaults.standard.set(created.identifier, forKey: defaultsKey)
+        return created.identifier
     }
 
     // MARK: Gmail

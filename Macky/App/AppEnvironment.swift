@@ -21,6 +21,7 @@ final class AppEnvironment {
     let googleAccountManager = GoogleAccountManager()
     let routineStore = RoutineStore()
     let mcpConnectionStore = MCPConnectionStore()
+    let zoomMeetingsManager: ZoomMeetingsManager
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -34,6 +35,8 @@ final class AppEnvironment {
         memoryManager = MemoryManager(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient)
         historyStore = HistoryStore(settings: settings)
         skillLibrary = SkillLibrary(settings: settings)
+        zoomMeetingsManager = ZoomMeetingsManager(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient,
+                                                  googleAccountManager: googleAccountManager)
         companionSession = CompanionSession(
             settings: settings,
             apiKeyStore: apiKeyStore,
@@ -47,7 +50,8 @@ final class AppEnvironment {
             skillLibrary: skillLibrary,
             googleAccountManager: googleAccountManager,
             routineStore: routineStore,
-            mcpConnectionStore: mcpConnectionStore
+            mcpConnectionStore: mcpConnectionStore,
+            zoomMeetingsManager: zoomMeetingsManager
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -87,6 +91,7 @@ final class AppEnvironment {
         }
         routineStore.startScheduler()
         Task { await mcpConnectionStore.refreshAll() }
+        zoomMeetingsManager.start()
 
         Task {
             await modelCatalogStore.refresh()
@@ -179,7 +184,8 @@ final class AppEnvironment {
                 skillLibrary: skillLibrary,
                 googleAccountManager: googleAccountManager,
                 routineStore: routineStore,
-                mcpConnectionStore: mcpConnectionStore
+                mcpConnectionStore: mcpConnectionStore,
+                zoomMeetingsManager: zoomMeetingsManager
             )
         }
     }

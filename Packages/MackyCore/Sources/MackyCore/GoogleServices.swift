@@ -5,7 +5,9 @@ import Foundation
 public enum GoogleOAuth {
     public static let scopes = [
         "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/drive.readonly"
+        "https://www.googleapis.com/auth/drive.readonly",
+        // Only files Macky creates itself (meeting notes); Macky cannot change the user's other files.
+        "https://www.googleapis.com/auth/drive.file"
     ]
     public static let authorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
     public static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!

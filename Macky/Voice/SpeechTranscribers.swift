@@ -57,6 +57,26 @@ actor WhisperKitTranscriber: SpeechTranscriber {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A long recording (e.g. a meeting), with the time each passage starts.
+    func transcribeFile(at fileURL: URL, languageCode: String?) async throws -> [TranscriptLine] {
+        let whisperKit = try await loadedWhisperKit()
+        var decodingOptions = DecodingOptions()
+        decodingOptions.task = .transcribe
+        decodingOptions.language = languageCode
+        decodingOptions.detectLanguage = languageCode == nil
+        decodingOptions.usePrefillPrompt = languageCode != nil
+        decodingOptions.temperature = 0
+        decodingOptions.skipSpecialTokens = true
+        decodingOptions.withoutTimestamps = false
+        // Splits long audio at pauses and transcribes the pieces in parallel.
+        decodingOptions.chunkingStrategy = .vad
+        let results = try await whisperKit.transcribe(audioPath: fileURL.path, decodeOptions: decodingOptions)
+        let lines = results.flatMap(\.segments).map { segment in
+            TranscriptLine(startSeconds: Double(segment.start), speaker: nil, text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return TranscriptFormatter.mergingConsecutiveSpeakers(lines.sorted { $0.startSeconds < $1.startSeconds })
+    }
+
     private func loadedWhisperKit() async throws -> WhisperKit {
         if let whisperKit { return whisperKit }
         if let loadingTask { return try await loadingTask.value }

@@ -51,11 +51,14 @@ public struct FrontmostApplicationContext: Equatable, Sendable {
     public var windowTitle: String?
     /// Text the user selected in that app, when it could be read.
     public var selectedText: String?
+    /// The address of the page open in the browser in front, when asked for.
+    public var pageURL: String?
 
-    public init(applicationName: String?, windowTitle: String?, selectedText: String? = nil) {
+    public init(applicationName: String?, windowTitle: String?, selectedText: String? = nil, pageURL: String? = nil) {
         self.applicationName = applicationName
         self.windowTitle = windowTitle
         self.selectedText = selectedText
+        self.pageURL = pageURL
     }
 }
 
@@ -191,6 +194,9 @@ public enum MackyPrompt {
             } else {
                 lines.append("Active app: \(applicationName).")
             }
+        }
+        if let pageURL = frontmostApplication?.pageURL, !pageURL.isEmpty {
+            lines.append("Open page: \(pageURL)")
         }
         if let selectedText = frontmostApplication?.selectedText?.trimmingCharacters(in: .whitespacesAndNewlines), !selectedText.isEmpty {
             let shownText = selectedText.count > 6000 ? String(selectedText.prefix(6000)) + "…" : selectedText

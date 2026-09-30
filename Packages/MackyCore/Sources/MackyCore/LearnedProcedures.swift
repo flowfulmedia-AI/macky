@@ -196,6 +196,7 @@ public struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
         case procedure      // replayed a learned procedure
         case backgroundAgent
         case routine
+        case meeting
     }
 
     public var id: UUID

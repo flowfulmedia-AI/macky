@@ -45,6 +45,7 @@ final class CompanionSession: ObservableObject {
     let googleAccountManager: GoogleAccountManager
     let routineStore: RoutineStore
     let mcpConnectionStore: MCPConnectionStore
+    let zoomMeetingsManager: ZoomMeetingsManager
     /// The routine being run, if the current request is one.
     private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
@@ -91,8 +92,10 @@ final class CompanionSession: ObservableObject {
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
          openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary,
-         googleAccountManager: GoogleAccountManager, routineStore: RoutineStore, mcpConnectionStore: MCPConnectionStore) {
+         googleAccountManager: GoogleAccountManager, routineStore: RoutineStore, mcpConnectionStore: MCPConnectionStore,
+         zoomMeetingsManager: ZoomMeetingsManager) {
         self.memoryManager = memoryManager
+        self.zoomMeetingsManager = zoomMeetingsManager
         self.mcpConnectionStore = mcpConnectionStore
         self.routineStore = routineStore
         self.googleAccountManager = googleAccountManager
@@ -135,6 +138,13 @@ final class CompanionSession: ObservableObject {
             self?.speechQueueDrained()
         }
         prepareNeuralVoice()
+        zoomMeetingsManager.transcribeAudioFile = { [weak self] fileURL in
+            guard let self else { return [] }
+            return try await self.transcribeMeetingAudio(at: fileURL)
+        }
+        zoomMeetingsManager.onMeetingSaved = { [weak self] savedNotes in
+            self?.meetingSaved(savedNotes)
+        }
     }
 
     // MARK: Public entry points
@@ -607,6 +617,66 @@ final class CompanionSession: ObservableObject {
         costAtRequestStart = costTracker.totalCostInCredits
     }
 
+    // MARK: Zoom meetings
+
+    private func transcribeMeetingAudio(at fileURL: URL) async throws -> [TranscriptLine] {
+        let whisperTranscriber = (transcriber as? WhisperKitTranscriber) ?? WhisperKitTranscriber(modelVariant: settings.whisperModelVariant.rawValue)
+        return try await whisperTranscriber.transcribeFile(at: fileURL, languageCode: settings.responseLanguage.transcriptionLanguageCode)
+    }
+
+    private func meetingSaved(_ savedNotes: SavedMeetingNotes) {
+        let notes = savedNotes.notes
+        var details = notes.summary
+        if !notes.decisions.isEmpty { details += "\nDecizii: " + notes.decisions.joined(separator: "; ") }
+        let actions = notes.actionItems.map { item in (item.owner.map { "\($0): " } ?? "") + item.task + (item.due.map { " (\($0))" } ?? "") }
+        if !actions.isEmpty { details += "\nAcțiuni: " + actions.joined(separator: "; ") }
+        historyStore.record(HistoryEntry(question: "Meeting Zoom: \(savedNotes.topic)", answer: notes.title + " · " + savedNotes.documentLink,
+                                         actions: actions, route: .meeting))
+        // What was said about clients and projects goes into memory too.
+        memoryManager.recordExchange(question: "Notițele meetingului Zoom „\(savedNotes.topic)”", answer: details, actions: [], failures: [])
+        if !state.isBusy {
+            overlayController.beginInteractionIfHidden(activity: .speaking)
+            overlayController.setBubbleText("📄 Meetingul „\(notes.title)” e salvat în Drive.")
+            overlayController.endInteraction(afterDelay: 5)
+        }
+        if zoomMeetingsManager.createsTasks && !notes.actionItems.isEmpty {
+            let routine = Routine(
+                name: "Taskuri din meetingul „\(notes.title)”",
+                triggerPhrases: [],
+                schedule: RoutineSchedule(isEnabled: false, hour: 9, minute: 0, weekdays: []),
+                instructions: "Adaugă în aplicația mea de taskuri acțiunile care sunt ale mele (sau fără responsabil) din meetingul „\(notes.title)”, "
+                    + "cu termenul dacă e spus și cu linkul notițelor \(savedNotes.documentLink) în descriere. Nu adăuga acțiunile altor oameni.\n"
+                    + actions.map { "- \($0)" }.joined(separator: "\n"),
+                speaksResult: false
+            )
+            Task { await runWhenIdle(routine) }
+        }
+    }
+
+    /// Runs a routine as soon as Macky is free (tries for about 10 minutes).
+    private func runWhenIdle(_ routine: Routine) async {
+        for _ in 0..<20 {
+            if startScheduledRoutine(routine) { return }
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+        }
+    }
+
+    /// The address of the front tab, for browsers that can tell it (asks macOS for Automation permission once).
+    private func browserPageURL(applicationName: String) async -> String? {
+        let chromiumBrowsers = ["Google Chrome", "Brave Browser", "Microsoft Edge", "Arc", "Chromium", "Vivaldi", "Opera"]
+        let script: String
+        if chromiumBrowsers.contains(applicationName) {
+            script = "tell application \"\(applicationName)\" to return URL of active tab of front window"
+        } else if applicationName == "Safari" {
+            script = "tell application \"Safari\" to return URL of front document"
+        } else {
+            return nil
+        }
+        let result = await screenActionExecutor.runAppleScript(script)
+        let address = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.succeeded && address.hasPrefix("http") ? address : nil
+    }
+
     // MARK: Routines
 
     /// Starts a scheduled routine unless Macky is busy (then the scheduler tries again shortly).
@@ -783,9 +853,14 @@ final class CompanionSession: ObservableObject {
         var frontmostApplication = frontmostApplication
         // Apps that hide their selection from Accessibility (some browsers, Electron apps): copy it instead,
         // but only when the request is about text, since copying touches the clipboard.
+        let capturesTask = TaskCaptureIntent.matches(question)
         if frontmostApplication.context.selectedText == nil, currentRequestWasSpoken, accessibilityInspector.isTrusted,
-           WritingIntent.mentionsText(question) {
+           WritingIntent.mentionsText(question) || capturesTask {
             frontmostApplication.context.selectedText = await dictationTextInserter.copySelectedText()
+        }
+        // "Fă task din asta" in a browser: the page link goes into the task.
+        if capturesTask, let applicationName = frontmostApplication.context.applicationName {
+            frontmostApplication.context.pageURL = await browserPageURL(applicationName: applicationName)
         }
         let memoryContext = await memoryManager.contextBlock(for: question)
         guard isCurrent(interactionIdentifier) else { return }
@@ -879,7 +954,7 @@ final class CompanionSession: ObservableObject {
             skillsSection: useToolCalling ? SkillCatalog.promptSection(for: skills) : nil,
             connectedAppsSection: MackyPrompt.connectedAppsSection(apps: connectedApps)
         )
-        let userText = MackyPrompt.userMessageText(
+        var userText = MackyPrompt.userMessageText(
             question: question,
             screenshots: capturedScreens.map(\.promptDescription),
             frontmostApplication: frontmostApplication.context,
@@ -887,6 +962,13 @@ final class CompanionSession: ObservableObject {
             userMarkings: Self.markings(from: userDrawingStrokes, on: capturedScreens, coordinateConvention: coordinateConvention),
             memoryContext: memoryContext
         )
+        if TaskCaptureIntent.matches(question) {
+            // Apps whose tools create tasks (e.g. Flowts); otherwise Reminders.
+            let taskAppNames = connectedApps.map(\.name).filter { name in
+                connectedTools.contains { $0.server.name == name && $0.tool.name.lowercased().contains("task") }
+            }
+            userText += "\n\n" + TaskCaptureIntent.instruction(taskAppNames: taskAppNames)
+        }
         let userParts: [ChatContentPart] = [.text(userText)] + capturedScreens.map { .jpegImage(base64EncodedData: $0.jpegData.base64EncodedString()) }
         conversationHistory.maximumRememberedExchanges = max(0, settings.rememberedExchangeCount)
         var messages = conversationHistory.messagesForRequest(systemPrompt: systemPrompt, currentUserParts: userParts)

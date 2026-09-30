@@ -14,6 +14,7 @@ struct SettingsView: View {
     @ObservedObject var googleAccountManager: GoogleAccountManager
     @ObservedObject var routineStore: RoutineStore
     @ObservedObject var mcpConnectionStore: MCPConnectionStore
+    @ObservedObject var zoomMeetingsManager: ZoomMeetingsManager
 
     var body: some View {
         TabView {
@@ -25,7 +26,7 @@ struct SettingsView: View {
                 .tabItem { Label("Voce", systemImage: "waveform") }
             RoutinesSettingsTab(routineStore: routineStore, session: session)
                 .tabItem { Label("Rutine", systemImage: "calendar.badge.clock") }
-            ConnectionsSettingsTab(googleAccountManager: googleAccountManager, mcpConnectionStore: mcpConnectionStore)
+            ConnectionsSettingsTab(googleAccountManager: googleAccountManager, mcpConnectionStore: mcpConnectionStore, zoomMeetingsManager: zoomMeetingsManager)
                 .tabItem { Label("Conexiuni", systemImage: "link") }
             SkillsSettingsTab(settings: settings, skillLibrary: skillLibrary)
                 .tabItem { Label("Skills", systemImage: "wand.and.stars") }
@@ -572,6 +573,7 @@ private struct SkillsSettingsTab: View {
 private struct ConnectionsSettingsTab: View {
     @ObservedObject var googleAccountManager: GoogleAccountManager
     @ObservedObject var mcpConnectionStore: MCPConnectionStore
+    @ObservedObject var zoomMeetingsManager: ZoomMeetingsManager
     @State private var clientIdentifier = ""
     @State private var clientSecret = ""
     @State private var saveError: String?
@@ -589,7 +591,9 @@ private struct ConnectionsSettingsTab: View {
                 } label: { Label("Adaugă aplicație", systemImage: "plus") }
             }
 
-            Section("Google: Gmail și Drive (doar citire)") {
+            ZoomSettingsSections(manager: zoomMeetingsManager, googleConnected: googleAccountManager.isConnected)
+
+            Section("Google: Gmail și Drive") {
                 HStack {
                     Image(systemName: googleAccountManager.isConnected ? "checkmark.circle.fill" : "circle")
                         .foregroundColor(googleAccountManager.isConnected ? .green : .secondary)
@@ -609,7 +613,7 @@ private struct ConnectionsSettingsTab: View {
                 if let statusText = googleAccountManager.statusText {
                     Text(statusText).font(.caption).foregroundColor(.secondary)
                 }
-                Text("Macky poate căuta și citi mailuri și fișiere din Drive („ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”). Nu poate trimite, șterge sau modifica nimic.")
+                Text("Macky poate căuta și citi mailuri și fișiere din Drive („ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”) și poate crea documente noi (notițele meetingurilor). Nu poate trimite mailuri și nu poate modifica sau șterge fișierele tale existente. Dacă te-ai conectat înainte de notițele de meeting, apasă Deconectează și conectează-te din nou, ca să-i dai voie să creeze documente.")
                     .font(.caption).foregroundColor(.secondary)
             }
 
@@ -901,6 +905,104 @@ private struct MCPServerRow: View {
                     .font(.caption)
                     .foregroundColor((store.statusByServer[draft.id] ?? "").hasPrefix("Eroare") ? .red : .secondary)
                     .lineLimit(1)
+            }
+        }
+    }
+}
+
+// MARK: - Zoom
+
+private struct ZoomSettingsSections: View {
+    @ObservedObject var manager: ZoomMeetingsManager
+    let googleConnected: Bool
+    @State private var accountIdentifier = ""
+    @State private var clientIdentifier = ""
+    @State private var clientSecret = ""
+    @State private var saveError: String?
+
+    var body: some View {
+        Section("Zoom: fiecare meeting transcris și salvat în Drive") {
+            Toggle("Procesează automat meetingurile înregistrate în cloud", isOn: $manager.isEnabled)
+            HStack {
+                Image(systemName: manager.hasCredentials ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(manager.hasCredentials ? .green : .secondary)
+                Text(manager.hasCredentials ? "Aplicația Zoom e configurată" : "Aplicația Zoom nu e configurată")
+                Spacer()
+                if manager.hasCredentials {
+                    Button("Testează") { Task { await manager.testConnection() } }
+                    Button(manager.isChecking ? "Verific…" : "Verifică acum") { Task { await manager.checkForNewMeetings() } }
+                        .disabled(manager.isChecking)
+                }
+            }
+            if let statusText = manager.statusText {
+                Text(statusText).font(.caption).foregroundColor(statusText.hasPrefix("Eroare") ? .red : .secondary)
+            }
+            if !googleConnected {
+                Text("Conectează și Google (mai jos), ca notițele să poată fi urcate în Drive.").font(.caption).foregroundColor(.orange)
+            }
+            TextField("Folder în Drive", text: $manager.driveFolderName)
+            TextField("Emailul contului Zoom (opțional, dacă „Testează” dă eroare)", text: $manager.userEmail)
+            Toggle("Pune acțiunile mele din meeting ca taskuri (în Flowts sau Reminders)", isOn: $manager.createsTasks)
+            Text("Macky verifică la fiecare 15 minute. Folosește transcrierea Zoom; dacă lipsește, transcrie audio-ul pe Mac. Notițele (rezumat, decizii, acțiuni, transcriere) ajung ca Google Doc în Drive și ca fișier în Documents/Macky/Meetinguri.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+
+        Section("Aplicația ta Zoom (o singură dată, ~10 minute)") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("1. Intră pe marketplace.zoom.us → Develop → Build App → Server-to-Server OAuth App. Nume: Macky.")
+                Text("2. Copiază aici Account ID, Client ID și Client Secret.")
+                Text("3. La Information completează numele companiei și emailul tău.")
+                Text("4. La Scopes adaugă: cloud_recording:read:list_user_recordings:admin, cloud_recording:read:list_recording_files:admin, cloud_recording:read:recording:admin, user:read:user:admin.")
+                Text("5. La Activation apasă Activate your app.")
+                Text("6. În Zoom (web) → Settings → Recording: pornește Cloud recording, Audio transcript și, dacă vrei fiecare meeting, Automatic recording → In the cloud.")
+                Text("Participanții sunt anunțați de Zoom că meetingul se înregistrează.").foregroundColor(.secondary)
+            }
+            .font(.callout)
+            Button("Deschide Zoom Marketplace") { NSWorkspace.shared.open(URL(string: "https://marketplace.zoom.us/develop/create")!) }
+            TextField("Account ID", text: $accountIdentifier).textFieldStyle(.roundedBorder)
+            TextField("Client ID", text: $clientIdentifier).textFieldStyle(.roundedBorder)
+            SecureField("Client Secret", text: $clientSecret).textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Salvează în Keychain și testează") {
+                    do {
+                        try manager.saveCredentials(accountIdentifier: accountIdentifier, clientIdentifier: clientIdentifier, clientSecret: clientSecret)
+                        accountIdentifier = ""
+                        clientIdentifier = ""
+                        clientSecret = ""
+                        saveError = nil
+                        Task { await manager.testConnection() }
+                    } catch {
+                        saveError = error.localizedDescription
+                    }
+                }
+                .disabled([accountIdentifier, clientIdentifier, clientSecret].contains { $0.trimmingCharacters(in: .whitespaces).isEmpty })
+                if manager.hasCredentials {
+                    Spacer()
+                    Button("Șterge datele Zoom", role: .destructive) { manager.removeCredentials() }
+                }
+            }
+            if let saveError {
+                Text(saveError).font(.caption).foregroundColor(.red)
+            }
+        }
+
+        if !manager.processedMeetings.isEmpty {
+            Section("Meetinguri procesate") {
+                ForEach(manager.processedMeetings.prefix(15)) { meeting in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(meeting.topic).fontWeight(.medium)
+                            Text(meeting.date.formatted(date: .abbreviated, time: .shortened) + (meeting.message.map { " · \($0)" } ?? ""))
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if let link = meeting.documentLink, let url = URL(string: link) {
+                            Button("Deschide") { NSWorkspace.shared.open(url) }
+                        } else {
+                            Button("Încearcă din nou") { manager.retry(meeting.id) }
+                        }
+                    }
+                }
             }
         }
     }

@@ -142,6 +142,7 @@ final class MCPConnectionStore: ObservableObject {
     /// Servers that answered "sign in first", with the header that says where.
     @Published private(set) var loginRequiredByServer: [UUID: String] = [:]
     @Published private(set) var signingInServers: Set<UUID> = []
+    private var signInAttempts: [UUID: UUID] = [:]
     private var authorizers: [UUID: MCPOAuthAuthorizer] = [:]
 
     private var clients: [UUID: MCPClient] = [:]
@@ -223,15 +224,21 @@ final class MCPConnectionStore: ObservableObject {
     func signIn(_ identifier: UUID) async {
         guard let server = servers.first(where: { $0.id == identifier }),
               let mcpURL = URL(string: server.url.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        let attempt = UUID()
+        signInAttempts[identifier] = attempt
         signingInServers.insert(identifier)
-        defer { signingInServers.remove(identifier) }
-        statusByServer[identifier] = "Aprobă accesul în browser…"
+        statusByServer[identifier] = "Aprobă accesul în browser… (dacă după login nu apare „Macky e conectat”, apasă din nou Conectează)"
         do {
             try await authorizer(for: identifier).signIn(mcpURL: mcpURL, wwwAuthenticateHeader: loginRequiredByServer[identifier])
+            guard signInAttempts[identifier] == attempt else { return }
+            signingInServers.remove(identifier)
             loginRequiredByServer[identifier] = nil
             clients[identifier] = nil
             await refreshTools(for: identifier)
         } catch {
+            // A newer attempt replaced this one: it reports its own result.
+            guard signInAttempts[identifier] == attempt else { return }
+            signingInServers.remove(identifier)
             statusByServer[identifier] = "Login eșuat: \(error.localizedDescription)"
         }
     }

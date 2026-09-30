@@ -17,6 +17,8 @@ final class MCPOAuthAuthorizer {
         return URLSession(configuration: configuration)
     }()
     private(set) var credentials: MCPOAuth.StoredCredentials?
+    /// The browser redirect listener of a sign-in in progress; a new sign-in replaces it.
+    private var activeReceiver: LoopbackOAuthReceiver?
 
     init(serverIdentifier: UUID) {
         self.serverIdentifier = serverIdentifier
@@ -63,8 +65,14 @@ final class MCPOAuthAuthorizer {
     /// The full sign-in: discovery → client registration → browser approval → tokens.
     func signIn(mcpURL: URL, wwwAuthenticateHeader: String?) async throws {
         let metadata = try await discoverAuthorizationServer(mcpURL: mcpURL, wwwAuthenticateHeader: wwwAuthenticateHeader)
+        // Pressing "Conectează" again (e.g. after the login page went elsewhere) starts over.
+        activeReceiver?.stop()
         let receiver = try await LoopbackOAuthReceiver.start()
-        defer { receiver.stop() }
+        activeReceiver = receiver
+        defer {
+            receiver.stop()
+            if activeReceiver === receiver { activeReceiver = nil }
+        }
         let redirectURI = "http://localhost:\(receiver.port)/callback"
 
         guard let registrationEndpoint = metadata.registrationEndpoint.flatMap(URL.init(string:)) else {

@@ -817,14 +817,14 @@ private struct RoutineEditor: View {
 }
 
 private struct MCPServerRow: View {
-    let store: MCPConnectionStore
+    @ObservedObject var store: MCPConnectionStore
     @State private var draft: MCPServerConfiguration
     @State private var token = ""
     @State private var isExpanded = false
     @State private var errorText: String?
 
     init(server: MCPServerConfiguration, store: MCPConnectionStore) {
-        self.store = store
+        _store = ObservedObject(wrappedValue: store)
         _draft = State(initialValue: server)
     }
 
@@ -847,11 +847,13 @@ private struct MCPServerRow: View {
                         Text("Serverele cu login (ex. Flowts) se conectează din browser, o singură dată.")
                             .font(.caption).foregroundColor(.secondary)
                         Spacer()
-                        Button(store.signingInServers.contains(draft.id) ? "Aștept aprobarea…" : "Conectează (login)") {
+                        if store.signingInServers.contains(draft.id) {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button(store.signingInServers.contains(draft.id) ? "Conectează din nou" : "Conectează (login)") {
                             store.upsert(draft)
                             Task { await store.signIn(draft.id) }
                         }
-                        .disabled(store.signingInServers.contains(draft.id))
                     }
                 }
                 HStack {
@@ -864,6 +866,9 @@ private struct MCPServerRow: View {
                     Toggle("Activă", isOn: $draft.isEnabled)
                     Spacer()
                     Button("Șterge", role: .destructive) { store.delete(draft.id) }
+                    Button("Testează") {
+                        Task { await store.refreshTools(for: draft.id) }
+                    }
                     Button("Salvează și testează") {
                         store.upsert(draft)
                         do {
@@ -875,10 +880,12 @@ private struct MCPServerRow: View {
                         }
                         Task { await store.refreshTools(for: draft.id) }
                     }
-                    .keyboardShortcut(.defaultAction)
                 }
                 if let errorText {
                     Text(errorText).font(.caption).foregroundColor(.red)
+                }
+                if let status = store.statusByServer[draft.id] {
+                    Text(status).font(.caption).foregroundColor(status.hasPrefix("Eroare") || status.hasPrefix("Login eșuat") ? .red : .secondary)
                 }
                 if let toolNames = store.toolNamesByServer[draft.id], !toolNames.isEmpty {
                     Text("Unelte: " + toolNames.joined(separator: ", "))

@@ -28,10 +28,37 @@ final class DictationTextInserter {
         }
     }
 
+    /// Reads the selection of apps that hide it from Accessibility, by copying it (⌘C) and then
+    /// putting the previous clipboard back. Returns nil when nothing is selected.
+    func copySelectedText() async -> String? {
+        let pasteboard = NSPasteboard.general
+        let savedPasteboardItems = Self.copyItems(of: pasteboard)
+        let changeCountBeforeCopying = pasteboard.changeCount
+        postCommand(withKeyCode: Self.virtualKeyCodeForC)
+        for _ in 0..<8 {
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            if pasteboard.changeCount != changeCountBeforeCopying { break }
+        }
+        guard pasteboard.changeCount != changeCountBeforeCopying else { return nil }
+        let copiedText = pasteboard.string(forType: .string)
+        pasteboard.clearContents()
+        if !savedPasteboardItems.isEmpty {
+            pasteboard.writeObjects(savedPasteboardItems)
+        }
+        guard let copiedText, !copiedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return copiedText
+    }
+
+    private static let virtualKeyCodeForC: CGKeyCode = 8
+
     private func postCommandV() {
+        postCommand(withKeyCode: Self.virtualKeyCodeForV)
+    }
+
+    private func postCommand(withKeyCode keyCode: CGKeyCode) {
         let eventSource = CGEventSource(stateID: .combinedSessionState)
-        let keyDownEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: Self.virtualKeyCodeForV, keyDown: true)
-        let keyUpEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: Self.virtualKeyCodeForV, keyDown: false)
+        let keyDownEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: true)
+        let keyUpEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: false)
         keyDownEvent?.flags = .maskCommand
         keyUpEvent?.flags = .maskCommand
         keyDownEvent?.post(tap: .cgAnnotatedSessionEventTap)

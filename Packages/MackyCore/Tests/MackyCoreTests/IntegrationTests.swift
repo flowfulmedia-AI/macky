@@ -66,7 +66,8 @@ final class CalendarAndDateTests: XCTestCase {
                        .createNote(title: "Idee", body: "text"))
         XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "b", name: "start_background_task", argumentsJSON: #"{"goal":"caută microfoane"}"#)),
                        .startBackgroundTask(goal: "caută microfoane"))
-        XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "x", name: "web_search", argumentsJSON: #"{"query":"a"}"#)))
+        // save_file stays a background-agent-only tool.
+        XCTAssertNil(ScreenAction(toolCall: ChatToolCall(identifier: "x", name: "save_file", argumentsJSON: #"{"file_name":"a.md","content":"b"}"#)))
     }
 
     func testDateContextMentionsTimeZone() {

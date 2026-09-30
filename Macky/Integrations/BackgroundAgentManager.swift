@@ -39,15 +39,11 @@ final class BackgroundAgentManager: ObservableObject {
     private let personalDataController: PersonalDataController
     private let notesController: NotesController
     private var runningTasks: [UUID: Task<Void, Never>] = [:]
-    private let pageDownloadSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 12
-        configuration.httpAdditionalHeaders = ["User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"]
-        return URLSession(configuration: configuration)
-    }()
+    let webResearchService: WebResearchService
 
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, openRouterClient: OpenRouterClient,
          personalDataController: PersonalDataController, notesController: NotesController) {
+        self.webResearchService = WebResearchService(settings: settings, openRouterClient: openRouterClient)
         self.settings = settings
         self.apiKeyStore = apiKeyStore
         self.openRouterClient = openRouterClient
@@ -172,41 +168,14 @@ final class BackgroundAgentManager: ObservableObject {
         }
     }
 
-    /// A small model call with OpenRouter's web plugin, asked to return a clean list of sources.
     private func webSearch(query: String, jobIdentifier: UUID, apiKey: String) async -> String {
-        let modelIdentifier = settings.fastModelIdentifier.isEmpty ? settings.powerfulModelIdentifier : settings.fastModelIdentifier
-        do {
-            let requestBody = try OpenRouterRequestBuilder.makeChatCompletionBody(
-                modelIdentifier: modelIdentifier,
-                messages: [ChatMessage(role: .user, text: "Web search: \(query)\n\nList the 6 most relevant results. For each: title, full URL, and 1-2 sentences with the concrete facts it contains (numbers, prices, dates). No introduction.")],
-                tools: [],
-                coordinateConvention: .imagePixels,
-                disableReasoning: settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier),
-                enableWebSearch: true,
-                maximumResponseTokens: 1500
-            )
-            let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey)
-            addCost(response.usage?.costInCredits, to: jobIdentifier)
-            return response.text.isEmpty ? "No results." : response.text
-        } catch {
-            return "Search failed: \(CompanionSession.userFacingMessage(for: error))"
-        }
+        let result = await webResearchService.search(query, apiKey: apiKey)
+        addCost(result.cost, to: jobIdentifier)
+        return result.text
     }
 
     private func fetchReadableText(from address: String) async -> String {
-        guard let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
-            return "Invalid URL."
-        }
-        do {
-            let (data, response) = try await pageDownloadSession.data(from: url)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<400).contains(statusCode) else { return "The page answered HTTP \(statusCode)." }
-            let html = String(decoding: data.prefix(3_000_000), as: UTF8.self)
-            let text = HTMLTextExtractor.readableText(fromHTML: html, maximumCharacters: 12_000)
-            return text.isEmpty ? "The page has no readable text." : text
-        } catch {
-            return "Could not download the page: \(error.localizedDescription)"
-        }
+        await webResearchService.readableText(from: address)
     }
 
     /// Files go to ~/Documents/Macky; an existing file is never overwritten.

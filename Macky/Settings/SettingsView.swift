@@ -10,6 +10,7 @@ struct SettingsView: View {
     @ObservedObject var session: CompanionSession
     @ObservedObject var spotifyCredentialsStore: SpotifyCredentialsStore
     let openRouterClient: OpenRouterClient
+    @ObservedObject var skillLibrary: SkillLibrary
 
     var body: some View {
         TabView {
@@ -19,6 +20,8 @@ struct SettingsView: View {
                 .tabItem { Label("AI", systemImage: "sparkles") }
             VoiceSettingsTab(settings: settings, session: session)
                 .tabItem { Label("Voce", systemImage: "waveform") }
+            SkillsSettingsTab(settings: settings, skillLibrary: skillLibrary)
+                .tabItem { Label("Skills", systemImage: "wand.and.stars") }
             GeneralSettingsTab(settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
         }
@@ -239,9 +242,23 @@ private struct VoiceSettingsTab: View {
                 Button("Aplică și pregătește modelul") { session.prepareTranscriber() }
             }
 
-            Section("Răspuns vocal (text → voce, voci macOS gratuite)") {
+            Section("Răspuns vocal") {
                 Toggle("Citește răspunsurile cu voce", isOn: $settings.speakResponses)
-                Picker("Voce", selection: $settings.speechVoiceIdentifier) {
+                Picker("Motor", selection: $settings.speechEngine) {
+                    ForEach(SpeechEngineChoice.allCases) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                if settings.speechEngine == .neural {
+                    Picker("Voce neurală", selection: $settings.neuralVoiceIdentifier) {
+                        ForEach(EdgeTTSProtocol.romanianVoices + EdgeTTSProtocol.englishVoices) { voice in
+                            Text("\(voice.displayName) · \(voice.id.prefix(5))").tag(voice.id)
+                        }
+                    }
+                    Text("Vocile neurale Microsoft (aceleași ca în Edge „Read aloud”) sună natural și sunt gratuite, dar au nevoie de internet. Fără internet, Macky trece singur pe vocea Mac-ului de mai jos.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                Picker(settings.speechEngine == .neural ? "Voce Mac (rezervă)" : "Voce", selection: $settings.speechVoiceIdentifier) {
                     Text("Automat (cea mai bună instalată)").tag("")
                     ForEach(availableVoices, id: \.identifier) { voice in
                         Text("\(voice.name) · \(voice.language) · \(SpeechSpeaker.qualityDescription(of: voice))").tag(voice.identifier)
@@ -258,11 +275,13 @@ private struct VoiceSettingsTab: View {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent")!)
                     }
                 }
-                Text("Pentru o voce naturală: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, apoi descarcă „Ioana (Enhanced)” sau o voce Premium.")
+                Text("Voci Mac mai bune: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, apoi descarcă „Ioana (Enhanced)”.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
+        .onChange(of: settings.neuralVoiceIdentifier) { _ in session.prepareNeuralVoice() }
+        .onChange(of: settings.speechEngine) { _ in session.prepareNeuralVoice() }
         .onChange(of: settings.transcriptionEngine) { _ in session.prepareTranscriber() }
         .onChange(of: settings.whisperModelVariant) { _ in session.prepareTranscriber() }
     }
@@ -349,6 +368,9 @@ private struct GeneralSettingsTab: View {
             }
 
             Section("Conversație") {
+                Toggle("Conversație fără taste: după un răspuns, ascultă încă 5 secunde", isOn: $settings.followUpListeningEnabled)
+                Text("Poți răspunde direct, fără să mai ții apăsat. „Mulțumesc” sau „gata” încheie conversația. Nu ascultă după acțiuni ca pornirea muzicii.")
+                    .font(.caption).foregroundColor(.secondary)
                 Stepper("Ține minte ultimele \(settings.rememberedExchangeCount) schimburi", value: $settings.rememberedExchangeCount, in: 0...20)
                 Text("Doar întrebarea curentă primește captura de ecran; cele vechi se trimit ca text, ca să coste puțin.")
                     .font(.caption).foregroundColor(.secondary)
@@ -475,6 +497,65 @@ private struct SpotifySettingsTab: View {
             statusText = "✓ Funcționează. Test: am găsit „\(result.name)”\(result.artistName.map { " – \($0)" } ?? "")."
         } catch {
             statusText = "✗ \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - Skills
+
+private struct SkillsSettingsTab: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var skillLibrary: SkillLibrary
+
+    var body: some View {
+        Form {
+            Section("Skill-urile tale din Claude") {
+                Text("Macky folosește skill-urile tale când scrie pentru tine (mailuri, oferte, postări…) sau când o cerere se potrivește cu descrierea lor. Pune în folderul de mai jos fiecare skill: folderul lui cu SKILL.md, fișierul .md, sau arhiva .zip / .skill descărcată din Claude (se dezarhivează singură).")
+                    .font(.callout)
+                HStack {
+                    Text(skillLibrary.folderURL.path)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Deschide folderul") {
+                        skillLibrary.reload()
+                        NSWorkspace.shared.open(skillLibrary.folderURL)
+                    }
+                    Button("Alege alt folder…") { chooseFolder() }
+                }
+                Text("Din Claude: Settings → Capabilities → Skills → la fiecare skill, meniul „…” → Download. Pentru skill-urile făcute de tine în Claude Code, copiază folderul din ~/.claude/skills.")
+                    .font(.caption).foregroundColor(.secondary)
+                if let lastError = skillLibrary.lastError {
+                    Text(lastError).font(.caption).foregroundColor(.red)
+                }
+            }
+            Section("Găsite (\(skillLibrary.skills.count))") {
+                if skillLibrary.skills.isEmpty {
+                    Text("Niciun skill încă.").foregroundColor(.secondary)
+                }
+                ForEach(skillLibrary.skills) { skill in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(skill.name).fontWeight(.semibold)
+                        Text(skill.description).font(.caption).foregroundColor(.secondary).lineLimit(3)
+                    }
+                }
+                Button("Reîncarcă") { skillLibrary.reload() }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { skillLibrary.reload() }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = skillLibrary.folderURL
+        if panel.runModal() == .OK, let url = panel.url {
+            settings.skillsFolderPath = url.path
+            skillLibrary.reload()
         }
     }
 }

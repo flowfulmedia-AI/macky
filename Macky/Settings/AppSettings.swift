@@ -65,6 +65,22 @@ enum CoordinateConventionChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which voice engine reads Macky's answers.
+enum SpeechEngineChoice: String, CaseIterable, Identifiable {
+    /// Microsoft's free neural voices (Alina, Emil), online; falls back to the Mac voice when unreachable.
+    case neural
+    /// The voices installed on the Mac, offline.
+    case system
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .neural: return "Neurală naturală (online, gratuit)"
+        case .system: return "Vocile Mac-ului (offline)"
+        }
+    }
+}
+
 /// All user preferences, persisted in UserDefaults. The API key is NOT here; it lives in the Keychain.
 @MainActor
 final class AppSettings: ObservableObject {
@@ -110,6 +126,12 @@ final class AppSettings: ObservableObject {
     /// Requests solved the same way twice are then replayed directly, without the model.
     @Published var learnedProceduresEnabled: Bool { didSet { defaults.set(learnedProceduresEnabled, forKey: Keys.learnedProceduresEnabled) } }
     @Published var historyEnabled: Bool { didSet { defaults.set(historyEnabled, forKey: Keys.historyEnabled) } }
+    /// After an answer, keep listening a few seconds so the user can reply without the keys.
+    @Published var followUpListeningEnabled: Bool { didSet { defaults.set(followUpListeningEnabled, forKey: Keys.followUpListeningEnabled) } }
+    /// Where the user's Claude skills are; empty means ~/Documents/Macky/Skills.
+    @Published var skillsFolderPath: String { didSet { defaults.set(skillsFolderPath, forKey: Keys.skillsFolderPath) } }
+    @Published var speechEngine: SpeechEngineChoice { didSet { defaults.set(speechEngine.rawValue, forKey: Keys.speechEngine) } }
+    @Published var neuralVoiceIdentifier: String { didSet { defaults.set(neuralVoiceIdentifier, forKey: Keys.neuralVoiceIdentifier) } }
 
     @Published var rememberedExchangeCount: Int { didSet { defaults.set(rememberedExchangeCount, forKey: Keys.rememberedExchangeCount) } }
     /// Models that answered "tool use not supported"; they get text tags instead of the point_at tool.
@@ -142,7 +164,10 @@ final class AppSettings: ObservableObject {
             Keys.quickCommandsEnabled: true,
             Keys.memoryEnabled: true,
             Keys.learnedProceduresEnabled: true,
-            Keys.historyEnabled: true
+            Keys.historyEnabled: true,
+            Keys.followUpListeningEnabled: true,
+            Keys.speechEngine: SpeechEngineChoice.neural.rawValue,
+            Keys.neuralVoiceIdentifier: "ro-RO-AlinaNeural"
         ])
 
         fastModelIdentifier = defaults.string(forKey: Keys.fastModelIdentifier) ?? ""
@@ -172,6 +197,10 @@ final class AppSettings: ObservableObject {
         memoryEnabled = defaults.bool(forKey: Keys.memoryEnabled)
         learnedProceduresEnabled = defaults.bool(forKey: Keys.learnedProceduresEnabled)
         historyEnabled = defaults.bool(forKey: Keys.historyEnabled)
+        followUpListeningEnabled = defaults.bool(forKey: Keys.followUpListeningEnabled)
+        skillsFolderPath = defaults.string(forKey: Keys.skillsFolderPath) ?? ""
+        speechEngine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.speechEngine) ?? "") ?? .neural
+        neuralVoiceIdentifier = defaults.string(forKey: Keys.neuralVoiceIdentifier) ?? "ro-RO-AlinaNeural"
         modelsWithoutToolCalling = Set(defaults.stringArray(forKey: Keys.modelsWithoutToolCalling) ?? [])
     }
 
@@ -243,5 +272,9 @@ final class AppSettings: ObservableObject {
         static let memoryEnabled = "memoryEnabled"
         static let learnedProceduresEnabled = "learnedProceduresEnabled"
         static let historyEnabled = "historyEnabled"
+        static let followUpListeningEnabled = "followUpListeningEnabled"
+        static let skillsFolderPath = "skillsFolderPath"
+        static let speechEngine = "speechEngine"
+        static let neuralVoiceIdentifier = "neuralVoiceIdentifier"
     }
 }

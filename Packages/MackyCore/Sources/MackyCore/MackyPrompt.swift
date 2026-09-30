@@ -49,17 +49,43 @@ public struct ScreenshotDescription: Equatable, Sendable {
 public struct FrontmostApplicationContext: Equatable, Sendable {
     public var applicationName: String?
     public var windowTitle: String?
+    /// Text the user selected in that app, when it could be read.
+    public var selectedText: String?
 
-    public init(applicationName: String?, windowTitle: String?) {
+    public init(applicationName: String?, windowTitle: String?, selectedText: String? = nil) {
         self.applicationName = applicationName
         self.windowTitle = windowTitle
+        self.selectedText = selectedText
     }
 }
 
 public enum MackyPrompt {
-    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false, memoryEnabled: Bool = false) -> String {
-        basePrompt(language: language, pointingMode: pointingMode) + (actionsEnabled ? actionInstructions : "") + (memoryEnabled ? memoryInstructions : "")
+    public static func systemPrompt(language: ResponseLanguage, pointingMode: PointingMode, actionsEnabled: Bool = false, memoryEnabled: Bool = false,
+                                    informationToolsEnabled: Bool = false, skillsSection: String? = nil) -> String {
+        basePrompt(language: language, pointingMode: pointingMode)
+            + (actionsEnabled ? actionInstructions : "")
+            + (memoryEnabled ? memoryInstructions : "")
+            + (informationToolsEnabled ? informationInstructions : "")
+            + (actionsEnabled ? writingInstructions : "")
+            + (skillsSection ?? "")
     }
+
+    static let informationInstructions = """
+
+
+        Web:
+        - For current facts (news, prices, schedules, weather, anything that changes or that you are not sure about), call web_search, then answer briefly in speech. Mention the source only if it matters. Use fetch_url to read a specific page.
+        """
+
+    static let writingInstructions = """
+
+
+        Writing assistant:
+        - When the message includes text the user selected, "this", "it" or "the text" means that selection.
+        - To rewrite, correct, translate or shorten it, call replace_selection with the full new text (it replaces the selection in place), plus task_done. Say only a very short confirmation like "Gata, l-am rescris." and do not read the new text aloud unless asked.
+        - To draft a reply to a selected message, write it and call replace_selection only if the user asked you to put it in; otherwise say it briefly.
+        - Write in the user's style and language; follow any matching skill.
+        """
 
     static let memoryInstructions = """
 
@@ -140,6 +166,10 @@ public enum MackyPrompt {
             } else {
                 lines.append("Active app: \(applicationName).")
             }
+        }
+        if let selectedText = frontmostApplication?.selectedText?.trimmingCharacters(in: .whitespacesAndNewlines), !selectedText.isEmpty {
+            let shownText = selectedText.count > 6000 ? String(selectedText.prefix(6000)) + "…" : selectedText
+            lines.append("Text the user has selected:\n\"\"\"\n\(shownText)\n\"\"\"")
         }
         for screenshot in screenshots {
             var description = "Screenshot \(screenshot.screenNumber) (\(screenshot.displayName)): "

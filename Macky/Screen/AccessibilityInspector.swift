@@ -11,7 +11,7 @@ struct AccessibilityElementInfo {
 
 /// The app and window the user was working in when they asked.
 struct FrontmostApplicationSnapshot {
-    let context: FrontmostApplicationContext
+    var context: FrontmostApplicationContext
     let processIdentifier: pid_t?
     let focusedWindowFrameInQuartzCoordinates: CGRect?
 }
@@ -42,8 +42,9 @@ final class AccessibilityInspector {
             windowTitle = stringAttribute(kAXTitleAttribute, of: focusedWindow)
             windowFrame = frame(of: focusedWindow)
         }
+        let selectedText = isTrusted ? self.selectedText(inProcess: processIdentifier) : nil
         return FrontmostApplicationSnapshot(
-            context: FrontmostApplicationContext(applicationName: frontmostApplication.localizedName, windowTitle: windowTitle),
+            context: FrontmostApplicationContext(applicationName: frontmostApplication.localizedName, windowTitle: windowTitle, selectedText: selectedText),
             processIdentifier: processIdentifier,
             focusedWindowFrameInQuartzCoordinates: windowFrame
         )
@@ -76,6 +77,18 @@ final class AccessibilityInspector {
             currentElement = parentValue as! AXUIElement
         }
         return fallbackCandidate
+    }
+
+    /// The text selected in the focused field of an app, when the app exposes it through Accessibility.
+    private func selectedText(inProcess processIdentifier: pid_t) -> String? {
+        let applicationElement = AXUIElementCreateApplication(processIdentifier)
+        AXUIElementSetMessagingTimeout(applicationElement, Self.messagingTimeoutInSeconds)
+        guard let focusedValue = copyAttribute(kAXFocusedUIElementAttribute, of: applicationElement),
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else { return nil }
+        let focusedElement = focusedValue as! AXUIElement
+        guard let text = stringAttribute(kAXSelectedTextAttribute, of: focusedElement),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
     }
 
     private func focusedWindow(ofProcess processIdentifier: pid_t) -> AXUIElement? {

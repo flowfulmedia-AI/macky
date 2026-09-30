@@ -30,11 +30,14 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case remember = "remember"
     case forget = "forget"
     case recall = "recall"
+    // Writing assistant and Claude skills.
+    case replaceSelection = "replace_selection"
+    case useSkill = "use_skill"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
         .spotify, .systemControl, .createEvent, .listEvents, .createReminder, .listReminders, .createNote, .arrangeWindow,
-        .startBackgroundTask, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
+        .startBackgroundTask, .replaceSelection, .clickElement, .click, .typeText, .pressKeys, .openApplication, .openURL, .runAppleScript
     ]
     /// Everything offered when Macky may act.
     public static let actingTools: [MackyTool] = actionTools + [.taskDone]
@@ -45,9 +48,12 @@ public enum MackyTool: String, CaseIterable, Sendable {
 
     /// Offered whenever tools are, even when Macky may not act on the computer.
     public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
+    /// Tools that only fetch information (web, skills); offered whenever tools are.
+    public static let informationTools: [MackyTool] = [.webSearch, .fetchURL, .useSkill]
 
     public var isAction: Bool { Self.actionTools.contains(self) }
     public var isMemoryTool: Bool { Self.memoryTools.contains(self) }
+    public var isInformationTool: Bool { Self.informationTools.contains(self) }
 }
 
 /// Builds the JSON body for OpenRouter's OpenAI-compatible `/chat/completions` endpoint.
@@ -249,8 +255,23 @@ public enum OpenRouterRequestBuilder {
                 "goal": ["type": "string", "description": "The full task in the user's words, with every detail they gave."]
             ]
             required = ["goal"]
+        case .replaceSelection:
+            description = "Replaces the text the user has selected in the app in front with new text (pasted in place). "
+                + "Use it when the user asks you to rewrite, correct, translate, shorten or answer in place of their selected text. "
+                + "Also works with no selection to insert text at the cursor."
+            properties = [
+                "text": ["type": "string", "description": "The complete new text, ready to use, with no comments around it."]
+            ]
+            required = ["text"]
+        case .useSkill:
+            description = "Loads one of the user's Claude skills by name and returns its instructions, which you must then follow."
+            properties = [
+                "name": ["type": "string", "description": "The skill's name exactly as listed."]
+            ]
+            required = ["name"]
         case .webSearch:
-            description = "Searches the web and returns the top results with their URLs and short summaries."
+            description = "Searches the web and returns the top results with their URLs and short summaries. "
+                + "Use it for current information: news, prices, opening hours, facts you are not sure about."
             properties = ["query": ["type": "string"]]
             required = ["query"]
         case .fetchURL:

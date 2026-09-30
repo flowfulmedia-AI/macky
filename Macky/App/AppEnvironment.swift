@@ -17,6 +17,7 @@ final class AppEnvironment {
     let companionSession: CompanionSession
     let memoryManager: MemoryManager
     let historyStore: HistoryStore
+    let skillLibrary: SkillLibrary
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -29,6 +30,7 @@ final class AppEnvironment {
         modelCatalogStore = ModelCatalogStore(openRouterClient: openRouterClient)
         memoryManager = MemoryManager(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient)
         historyStore = HistoryStore(settings: settings)
+        skillLibrary = SkillLibrary(settings: settings)
         companionSession = CompanionSession(
             settings: settings,
             apiKeyStore: apiKeyStore,
@@ -38,7 +40,8 @@ final class AppEnvironment {
             spotifyCredentialsStore: spotifyCredentialsStore,
             openRouterClient: openRouterClient,
             memoryManager: memoryManager,
-            historyStore: historyStore
+            historyStore: historyStore,
+            skillLibrary: skillLibrary
         )
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
@@ -72,6 +75,7 @@ final class AppEnvironment {
 
         companionSession.prepareTranscriber()
         memoryManager.start()
+        skillLibrary.reload()
 
         Task {
             await modelCatalogStore.refresh()
@@ -160,7 +164,8 @@ final class AppEnvironment {
                 modelCatalogStore: modelCatalogStore,
                 session: companionSession,
                 spotifyCredentialsStore: spotifyCredentialsStore,
-                openRouterClient: openRouterClient
+                openRouterClient: openRouterClient,
+                skillLibrary: skillLibrary
             )
         }
     }

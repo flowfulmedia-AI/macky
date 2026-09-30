@@ -38,10 +38,14 @@ public enum ScreenAction: Equatable, Sendable {
     case remember(kind: MemoryKind, subject: String, content: String)
     case forget(query: String)
     case recall(query: String)
+    case replaceSelection(text: String)
+    case useSkill(name: String)
+    case webSearch(query: String)
+    case fetchURL(String)
 
     /// Parses an action tool call. Returns nil for `point_at` or malformed arguments.
     public init?(toolCall: ChatToolCall) {
-        guard let tool = MackyTool(rawValue: toolCall.name), tool.isAction || tool.isMemoryTool else { return nil }
+        guard let tool = MackyTool(rawValue: toolCall.name), tool.isAction || tool.isMemoryTool || tool.isInformationTool else { return nil }
         let arguments = (toolCall.argumentsJSON.data(using: .utf8))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
 
@@ -114,7 +118,19 @@ public enum ScreenAction: Equatable, Sendable {
         case .recall:
             guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
             self = .recall(query: query)
-        case .pointAt, .taskDone, .webSearch, .fetchURL, .saveFile, .finishTask:
+        case .replaceSelection:
+            guard let text = arguments["text"] as? String, !text.isEmpty else { return nil }
+            self = .replaceSelection(text: text)
+        case .useSkill:
+            guard let name = Self.nonEmptyString(arguments["name"]) else { return nil }
+            self = .useSkill(name: name)
+        case .webSearch:
+            guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
+            self = .webSearch(query: query)
+        case .fetchURL:
+            guard let url = Self.nonEmptyString(arguments["url"]) else { return nil }
+            self = .fetchURL(url)
+        case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
     }
@@ -166,13 +182,21 @@ public enum ScreenAction: Equatable, Sendable {
             return "Uită: \(query)"
         case .recall(let query):
             return "Caută în memorie: \(query)"
+        case .replaceSelection(let text):
+            return "Înlocuiește textul selectat cu „\(text.count > 60 ? String(text.prefix(60)) + "…" : text)”"
+        case .useSkill(let name):
+            return "Folosește skill-ul \(name)"
+        case .webSearch(let query):
+            return "Caută pe web: \(query)"
+        case .fetchURL(let url):
+            return "Citește \(url.count > 60 ? String(url.prefix(60)) + "…" : url)"
         }
     }
 
     /// Actions that only read, never change anything, so they need no confirmation.
     public var isReadOnly: Bool {
         switch self {
-        case .listEvents, .listReminders, .recall: return true
+        case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL: return true
         default: return false
         }
     }
@@ -181,6 +205,22 @@ public enum ScreenAction: Equatable, Sendable {
     public var isMemoryOperation: Bool {
         switch self {
         case .remember, .forget, .recall: return true
+        default: return false
+        }
+    }
+
+    /// Works without the screen: memory, web and skills. No new screenshot is needed after these.
+    public var needsNoScreen: Bool {
+        switch self {
+        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL: return true
+        default: return false
+        }
+    }
+
+    /// Returns information the model has to read before it can answer.
+    public var returnsInformation: Bool {
+        switch self {
+        case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders: return true
         default: return false
         }
     }

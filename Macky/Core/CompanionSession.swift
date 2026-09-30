@@ -41,6 +41,14 @@ final class CompanionSession: ObservableObject {
     let backgroundAgentManager: BackgroundAgentManager
     let memoryManager: MemoryManager
     let historyStore: HistoryStore
+    let skillLibrary: SkillLibrary
+    /// Set while Macky listens for a reply after answering, without the keys (see `startFollowUpListening`).
+    private var followUpListeningIdentifier: UUID?
+    private var followUpWindow: Double = FollowUpListeningPolicy.defaultWindow
+    /// Whether the request being answered was spoken (follow-up listening only continues spoken conversations).
+    private var currentRequestWasSpoken = false
+    /// Set by answers that invite a reply (not by actions like playing music, where the mic would hear the music).
+    private var shouldListenForFollowUp = false
     /// The learned procedure that answered the previous request; a correction right after counts against it.
     private var lastReplayedProcedureIdentifier: UUID?
     /// Session cost when the current request started, to know what one request cost.
@@ -76,8 +84,9 @@ final class CompanionSession: ObservableObject {
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
          spotifyCredentialsStore: SpotifyCredentialsStore,
-         openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore) {
+         openRouterClient: OpenRouterClient, memoryManager: MemoryManager, historyStore: HistoryStore, skillLibrary: SkillLibrary) {
         self.memoryManager = memoryManager
+        self.skillLibrary = skillLibrary
         self.historyStore = historyStore
         self.settings = settings
         self.apiKeyStore = apiKeyStore
@@ -115,6 +124,7 @@ final class CompanionSession: ObservableObject {
         speechSpeaker.onAllSpeechFinished = { [weak self] in
             self?.speechQueueDrained()
         }
+        prepareNeuralVoice()
     }
 
     // MARK: Public entry points
@@ -141,6 +151,7 @@ final class CompanionSession: ObservableObject {
         overlayController.beginInteraction(activity: .thinking)
         state = .thinking
         noteNewRequest(question)
+        currentRequestWasSpoken = false
         currentInteractionTask = Task {
             if settings.actionMode != .disabled, let procedure = memoryManager.procedure(matching: question),
                await runLearnedProcedure(procedure, question: question, interactionIdentifier: interactionIdentifier) {
@@ -159,6 +170,8 @@ final class CompanionSession: ObservableObject {
         currentInteractionTask = nil
         if audioRecorder.isRecording { _ = audioRecorder.stopRecording() }
         activeRecordingPurpose = nil
+        followUpListeningIdentifier = nil
+        shouldListenForFollowUp = false
         speechSpeaker.stopSpeaking()
         stopWatchingPointing()
         actionConfirmationController.cancelPendingConfirmation()
@@ -175,7 +188,8 @@ final class CompanionSession: ObservableObject {
             ? "Hi, I'm Macky. Hold the shortcut and ask me anything about your screen."
             : "Salut, sunt Macky. Ține apăsat și întreabă-mă orice despre ce vezi pe ecran."
         speechSpeaker.speak(sampleSentence, voiceIdentifier: settings.speechVoiceIdentifier,
-                            languageCode: settings.responseLanguage.transcriptionLanguageCode, rateMultiplier: settings.speechRateMultiplier)
+                            languageCode: settings.responseLanguage.transcriptionLanguageCode, rateMultiplier: settings.speechRateMultiplier,
+                            neuralVoice: neuralVoiceForAnswers)
     }
 
     func forgetConversation() {
@@ -266,49 +280,12 @@ final class CompanionSession: ObservableObject {
             case .talk:
                 // The screen is captured right at release, while the user still looks at what they asked about.
                 let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
-                async let capturedScreensTask = captureScreensForQuestion(userDrawingStrokes: userDrawingStrokes)
+                let capturedScreensTask = Task { await self.captureScreensForQuestion(userDrawingStrokes: userDrawingStrokes) }
                 let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier)
                 interactionTimings?.transcriptionFinishedDate = Date()
                 guard isCurrent(interactionIdentifier), let transcript else { return }
-                noteNewRequest(transcript)
-
-                // "Agent, caută…" starts a background job right away.
-                if settings.actionMode != .disabled, let backgroundGoal = BackgroundTaskTrigger.goal(from: transcript) {
-                    startBackgroundJob(goal: backgroundGoal, question: transcript)
-                    return
-                }
-
-                // Volume, brightness, dark mode, lock: instant, no model.
-                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
-                   let systemCommand = SystemCommandMatcher.match(transcript) {
-                    await runSystemCommand(systemCommand, question: transcript, interactionIdentifier: interactionIdentifier)
-                    return
-                }
-
-                // Music requests go straight to Spotify: no screenshot, no model, verified playback.
-                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
-                   let spotifyCommand = SpotifyCommandMatcher.match(transcript) {
-                    await runSpotifyCommand(spotifyCommand, question: transcript, interactionIdentifier: interactionIdentifier)
-                    return
-                }
-
-                // Simple commands ("pauză", "deschide Safari") run instantly, without screenshot or model.
-                if settings.quickCommandsEnabled && settings.actionMode != .disabled,
-                   let quickCommand = QuickCommandMatcher.match(transcript),
-                   await runQuickCommand(quickCommand, question: transcript, interactionIdentifier: interactionIdentifier) {
-                    return
-                }
-
-                // Something Macky already learned to do by itself: replayed directly, no screenshot, no model.
-                if settings.actionMode != .disabled, let procedure = memoryManager.procedure(matching: transcript),
-                   await runLearnedProcedure(procedure, question: transcript, interactionIdentifier: interactionIdentifier) {
-                    return
-                }
-
-                let capturedScreens = await capturedScreensTask
-                guard isCurrent(interactionIdentifier) else { return }
-                await answer(question: transcript, capturedScreens: capturedScreens, frontmostApplication: frontmostApplication,
-                             userDrawingStrokes: userDrawingStrokes, interactionIdentifier: interactionIdentifier)
+                await handleSpokenRequest(transcript, frontmostApplication: frontmostApplication, capturedScreensTask: capturedScreensTask,
+                                          userDrawingStrokes: userDrawingStrokes, interactionIdentifier: interactionIdentifier)
             case .dictate:
                 guard let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier),
                       isCurrent(interactionIdentifier) else { return }
@@ -318,6 +295,52 @@ final class CompanionSession: ObservableObject {
                 overlayController.endInteraction(afterDelay: 1.2)
             }
         }
+    }
+
+    /// Routes a spoken request: instant local handlers first, then learned procedures, then the model.
+    private func handleSpokenRequest(_ transcript: String, frontmostApplication: FrontmostApplicationSnapshot,
+                                     capturedScreensTask: Task<[CapturedScreen], Never>, userDrawingStrokes: [[CGPoint]],
+                                     interactionIdentifier: UUID) async {
+        noteNewRequest(transcript)
+        currentRequestWasSpoken = true
+
+        // "Agent, caută…" starts a background job right away.
+        if settings.actionMode != .disabled, let backgroundGoal = BackgroundTaskTrigger.goal(from: transcript) {
+            startBackgroundJob(goal: backgroundGoal, question: transcript)
+            return
+        }
+
+        // Volume, brightness, dark mode, lock: instant, no model.
+        if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+           let systemCommand = SystemCommandMatcher.match(transcript) {
+            await runSystemCommand(systemCommand, question: transcript, interactionIdentifier: interactionIdentifier)
+            return
+        }
+
+        // Music requests go straight to Spotify: no screenshot, no model, verified playback.
+        if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+           let spotifyCommand = SpotifyCommandMatcher.match(transcript) {
+            await runSpotifyCommand(spotifyCommand, question: transcript, interactionIdentifier: interactionIdentifier)
+            return
+        }
+
+        // Simple commands ("pauză", "deschide Safari") run instantly, without screenshot or model.
+        if settings.quickCommandsEnabled && settings.actionMode != .disabled,
+           let quickCommand = QuickCommandMatcher.match(transcript),
+           await runQuickCommand(quickCommand, question: transcript, interactionIdentifier: interactionIdentifier) {
+            return
+        }
+
+        // Something Macky already learned to do by itself: replayed directly, no screenshot, no model.
+        if settings.actionMode != .disabled, let procedure = memoryManager.procedure(matching: transcript),
+           await runLearnedProcedure(procedure, question: transcript, interactionIdentifier: interactionIdentifier) {
+            return
+        }
+
+        let capturedScreens = await capturedScreensTask.value
+        guard isCurrent(interactionIdentifier) else { return }
+        await answer(question: transcript, capturedScreens: capturedScreens, frontmostApplication: frontmostApplication,
+                     userDrawingStrokes: userDrawingStrokes, interactionIdentifier: interactionIdentifier)
     }
 
     private func runSystemCommand(_ systemCommand: SystemCommand, question: String, interactionIdentifier: UUID) async {
@@ -387,6 +410,10 @@ final class CompanionSession: ObservableObject {
     /// is transcribed right away; if they then release the keys without saying more, that transcript is used
     /// and there is nothing left to wait for.
     private func audioChunkRecorded(chunkLevel: Float, sampleCount: Int) {
+        if followUpListeningIdentifier != nil {
+            followUpAudioChunkRecorded(chunkLevel: chunkLevel, sampleCount: sampleCount)
+            return
+        }
         guard activeRecordingPurpose != nil else { return }
         speechEndpointDetector.append(chunkLevel: chunkLevel, sampleCount: sampleCount)
         guard speechEndpointDetector.hasSpeechEnded(minimumPause: 0.3, sampleRate: AudioRecorder.transcriptionSampleRate) else { return }
@@ -463,6 +490,91 @@ final class CompanionSession: ObservableObject {
             finishInteraction()
         }
         return true
+    }
+
+    // MARK: Follow-up listening
+
+    /// After an answer, listens a few seconds more: if the user replies, that reply is handled like a new
+    /// spoken request (with the conversation so far); if nobody speaks, Macky stops listening quietly.
+    @discardableResult
+    private func startFollowUpListening(afterAnswer answer: String) -> Bool {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, !audioRecorder.isRecording else { return false }
+        do {
+            try audioRecorder.startRecording()
+        } catch {
+            return false
+        }
+        let listeningIdentifier = UUID()
+        followUpListeningIdentifier = listeningIdentifier
+        followUpWindow = FollowUpListeningPolicy.listeningWindow(afterAnswer: answer)
+        speechEndpointDetector = SpeechEndpointDetector()
+        earlyTranscription?.task.cancel()
+        earlyTranscription = nil
+        state = .listening
+        overlayController.beginInteractionIfHidden(activity: .listening)
+        overlayController.setActivity(.listening)
+        // Safety net in case audio stops arriving.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64((FollowUpListeningPolicy.maximumDuration + 2) * 1_000_000_000))
+            guard let self, self.followUpListeningIdentifier == listeningIdentifier else { return }
+            self.stopFollowUpListening()
+        }
+        return true
+    }
+
+    private func followUpAudioChunkRecorded(chunkLevel: Float, sampleCount: Int) {
+        speechEndpointDetector.append(chunkLevel: chunkLevel, sampleCount: sampleCount)
+        let sampleRate = AudioRecorder.transcriptionSampleRate
+        let elapsedSeconds = Double(speechEndpointDetector.totalSampleCount) / sampleRate
+        switch FollowUpListeningPolicy.decide(detector: speechEndpointDetector, elapsedSeconds: elapsedSeconds, window: followUpWindow, sampleRate: sampleRate) {
+        case .keepListening:
+            return
+        case .giveUp:
+            stopFollowUpListening()
+        case .finish:
+            finishFollowUpListening()
+        }
+    }
+
+    private func stopFollowUpListening() {
+        followUpListeningIdentifier = nil
+        if audioRecorder.isRecording { _ = audioRecorder.stopRecording() }
+        guard state == .listening else { return }
+        state = .idle
+        if overlayController.isShowingPointing {
+            overlayController.setActivity(.pointing)
+        } else {
+            overlayController.endInteraction(afterDelay: 0.2)
+        }
+    }
+
+    private func finishFollowUpListening() {
+        followUpListeningIdentifier = nil
+        let recordedAudio = audioRecorder.stopRecording()
+        stopWatchingPointing()
+        overlayController.clearPointing()
+        let interactionIdentifier = startNewInteraction()
+        state = .transcribing
+        overlayController.setActivity(.thinking)
+        interactionTimings = InteractionTimings(releaseDate: Date())
+
+        currentInteractionTask = Task {
+            let frontmostApplication = accessibilityInspector.frontmostApplicationSnapshot()
+            let capturedScreensTask = Task { await self.captureScreensForQuestion() }
+            let transcript = await transcribe(recordedAudio, interactionIdentifier: interactionIdentifier, reportsSilence: false)
+            interactionTimings?.transcriptionFinishedDate = Date()
+            guard isCurrent(interactionIdentifier) else { return }
+            // Noise, or "mulțumesc" / "gata": the conversation ends here.
+            guard let transcript, !FollowUpListeningPolicy.isDismissal(transcript) else {
+                capturedScreensTask.cancel()
+                interactionTimings = nil
+                state = .idle
+                overlayController.endInteraction(afterDelay: 0.3)
+                return
+            }
+            await handleSpokenRequest(transcript, frontmostApplication: frontmostApplication, capturedScreensTask: capturedScreensTask,
+                                      userDrawingStrokes: [], interactionIdentifier: interactionIdentifier)
+        }
     }
 
     // MARK: Memory, procedures, history
@@ -545,7 +657,7 @@ final class CompanionSession: ObservableObject {
     }
 
     /// Returns nil (after showing an error) when nothing usable was heard.
-    private func transcribe(_ recordedAudio: RecordedAudio, interactionIdentifier: UUID) async -> String? {
+    private func transcribe(_ recordedAudio: RecordedAudio, interactionIdentifier: UUID, reportsSilence: Bool = true) async -> String? {
         prepareTranscriber()
         guard let transcriber else {
             fail(with: "Transcrierea nu e pregătită.")
@@ -569,7 +681,7 @@ final class CompanionSession: ObservableObject {
             let looksLikeSilence = cleanedTranscript.isEmpty
                 || (silenceHallucinations.contains(cleanedTranscript) && recordedAudio.durationInSeconds < 2.5)
             guard !looksLikeSilence else {
-                fail(with: "Nu am auzit nimic. Ține apăsat și vorbește, apoi eliberează.")
+                if reportsSilence { fail(with: "Nu am auzit nimic. Ține apăsat și vorbește, apoi eliberează.") }
                 return nil
             }
             return cleanedTranscript
@@ -618,6 +730,13 @@ final class CompanionSession: ObservableObject {
         let coordinateConvention = settings.coordinateConvention(forModelIdentifier: modelIdentifier)
         var useToolCalling = settings.shouldUseToolCalling(forModelIdentifier: modelIdentifier, catalogModel: modelCatalogStore.model(withIdentifier: modelIdentifier))
         var disableReasoning = settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier)
+        var frontmostApplication = frontmostApplication
+        // Apps that hide their selection from Accessibility (some browsers, Electron apps): copy it instead,
+        // but only when the request is about text, since copying touches the clipboard.
+        if frontmostApplication.context.selectedText == nil, currentRequestWasSpoken, accessibilityInspector.isTrusted,
+           WritingIntent.mentionsText(question) {
+            frontmostApplication.context.selectedText = await dictationTextInserter.copySelectedText()
+        }
         let memoryContext = await memoryManager.contextBlock(for: question)
         guard isCurrent(interactionIdentifier) else { return }
 
@@ -682,12 +801,19 @@ final class CompanionSession: ObservableObject {
         var tools: [MackyTool] = useToolCalling ? [.pointAt] : []
         if actionsEnabled { tools += MackyTool.actingTools }
         if memoryToolsEnabled { tools += MackyTool.memoryTools }
+        skillLibrary.reloadIfChanged()
+        let skills = skillLibrary.skills
+        if useToolCalling {
+            tools += MackyTool.informationTools.filter { $0 != .useSkill || !skills.isEmpty }
+        }
 
         let systemPrompt = MackyPrompt.systemPrompt(
             language: settings.responseLanguage,
             pointingMode: useToolCalling ? .toolCall : .textTag,
             actionsEnabled: actionsEnabled,
-            memoryEnabled: memoryToolsEnabled
+            memoryEnabled: memoryToolsEnabled,
+            informationToolsEnabled: useToolCalling,
+            skillsSection: useToolCalling ? SkillCatalog.promptSection(for: skills) : nil
         )
         let userText = MackyPrompt.userMessageText(
             question: question,
@@ -732,8 +858,8 @@ final class CompanionSession: ObservableObject {
 
             let requestedActions = stepResult.toolCalls.compactMap { ScreenAction(toolCall: $0) }
             let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
-            let onlyMemoryOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.isMemoryOperation)
-            guard (actionsEnabled || onlyMemoryOperations), !requestedActions.isEmpty else {
+            let onlyScreenlessOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.needsNoScreen)
+            guard (actionsEnabled || onlyScreenlessOperations), !requestedActions.isEmpty else {
                 if !isFirstStep && !stepResult.visibleText.isEmpty {
                     // A quiet step that ends with a message (a problem, a question): say it now.
                     showAndSpeak(stepResult.visibleText)
@@ -798,13 +924,10 @@ final class CompanionSession: ObservableObject {
                 break agentLoop
             }
 
-            // Memory tools need no new screenshot. After "remember"/"forget" with an answer already given, the turn is over;
-            // after "recall" the model needs one more step to answer with what was found.
-            if onlyMemoryOperations {
-                let needsAnotherStep = stepResult.visibleText.isEmpty || requestedActions.contains {
-                    if case .recall = $0 { return true }
-                    return false
-                }
+            // Memory, web and skill tools need no new screenshot. After "remember"/"forget" with an answer already given,
+            // the turn is over; after tools that return information the model needs one more step to answer with it.
+            if onlyScreenlessOperations {
+                let needsAnotherStep = stepResult.visibleText.isEmpty || requestedActions.contains(where: \.returnsInformation)
                 if !needsAnotherStep || stepNumber == Self.maximumAgentSteps { break agentLoop }
                 state = .thinking
                 overlayController.setActivity(.thinking)
@@ -869,6 +992,8 @@ final class CompanionSession: ObservableObject {
         if !performedActionDescriptions.isEmpty { rememberedAnswer += " (Am făcut: \(performedActionDescriptions.joined(separator: "; ")).)" }
         conversationHistory.record(userText: question, assistantText: rememberedAnswer)
         interactionTimings?.workFinishedDate = Date()
+        // Answers invite a reply; actions (music, opening apps) do not, unless Macky asked something.
+        shouldListenForFollowUp = performedActionDescriptions.isEmpty || finalAnswer.hasSuffix("?")
         recordInHistory(question: question, answer: finalAnswer, actions: performedActionDescriptions, route: .model)
         memoryManager.recordExchange(question: question, answer: finalAnswer, actions: performedActionDescriptions, failures: failureReasons)
         if taskEndedCleanly, memoryManager.recordSuccessfulRun(request: question, toolCalls: executedToolCalls) != nil {
@@ -993,6 +1118,19 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await memoryManager.forget(query: query))
         case .recall(let query):
             return .done(action.userFacingDescription, resultDetail: await memoryManager.recall(query: query))
+        case .useSkill(let name):
+            guard let skill = skillLibrary.skill(named: name) else {
+                return .failed("No skill is called \(name). Available: \(skillLibrary.skills.map(\.name).joined(separator: ", ")).")
+            }
+            return .done(action.userFacingDescription, resultDetail: SkillCatalog.toolResult(for: skill))
+        case .webSearch(let query):
+            guard let apiKey = apiKeyStore.apiKey() else { return .failed("No OpenRouter key.") }
+            overlayController.setBubbleText("Caut pe web: \(query)…")
+            let result = await backgroundAgentManager.webResearchService.search(query, apiKey: apiKey)
+            if let cost = result.cost { costTracker.record(TokenUsage(promptTokens: 0, completionTokens: 0, costInCredits: cost)) }
+            return .done(action.userFacingDescription, resultDetail: result.text)
+        case .fetchURL(let address):
+            return .done(action.userFacingDescription, resultDetail: await backgroundAgentManager.webResearchService.readableText(from: address, maximumCharacters: 8000))
         default:
             break
         }
@@ -1016,6 +1154,8 @@ final class CompanionSession: ObservableObject {
         // Reading the calendar or starting a background job changes nothing on screen: no need to ask.
         var needsConfirmation = !action.isReadOnly
         if case .startBackgroundTask = action { needsConfirmation = false }
+        // Replacing selected text is what the user just asked for, and ⌘Z undoes it.
+        if case .replaceSelection = action { needsConfirmation = false }
         if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion && needsConfirmation {
             let answer = await actionConfirmationController.requestConfirmation(
                 actionDescription: action.userFacingDescription,
@@ -1081,8 +1221,12 @@ final class CompanionSession: ObservableObject {
         case .startBackgroundTask(let goal):
             backgroundAgentManager.start(goal: goal)
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
-        case .remember, .forget, .recall:
+        case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL:
             break
+        case .replaceSelection(let text):
+            dictationTextInserter.insert(text)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            return .done(action.userFacingDescription, resultDetail: "The selected text was replaced.")
         case .clickElement(let label, let applicationName):
             let pressResult = await accessibilityElementFinder.pressElement(label: label, applicationName: applicationName)
             guard pressResult.succeeded else {
@@ -1163,7 +1307,27 @@ final class CompanionSession: ObservableObject {
             SpeechTextCleaner.cleanForSpeech(sentence),
             voiceIdentifier: settings.speechVoiceIdentifier,
             languageCode: settings.responseLanguage.transcriptionLanguageCode,
-            rateMultiplier: settings.speechRateMultiplier
+            rateMultiplier: settings.speechRateMultiplier,
+            neuralVoice: neuralVoiceForAnswers
+        )
+    }
+
+    /// The Edge neural voice to use, or nil for the Mac voice.
+    private var neuralVoiceForAnswers: String? {
+        guard settings.speechEngine == .neural else { return nil }
+        let chosenVoice = settings.neuralVoiceIdentifier.isEmpty ? EdgeTTSProtocol.romanianVoices[0].id : settings.neuralVoiceIdentifier
+        // A Romanian voice reading English sounds wrong, and the other way around.
+        if settings.responseLanguage == .english && chosenVoice.hasPrefix("ro-") { return EdgeTTSProtocol.englishVoices[0].id }
+        if settings.responseLanguage == .romanian && !chosenVoice.hasPrefix("ro-") { return EdgeTTSProtocol.romanianVoices[0].id }
+        return chosenVoice
+    }
+
+    /// Fetches the audio of the usual short replies in advance, so they play instantly.
+    func prepareNeuralVoice() {
+        guard let neuralVoiceForAnswers else { return }
+        speechSpeaker.prepareShortPhrases(
+            ["Sigur!", "Sigur, pornesc acum!", "Sigur, mă ocup!", "Sigur, mă ocup în fundal!", "Gata.", "Am reținut."],
+            neuralVoice: neuralVoiceForAnswers, rateMultiplier: settings.speechRateMultiplier
         )
     }
 
@@ -1178,6 +1342,11 @@ final class CompanionSession: ObservableObject {
         if let interactionTimings {
             lastTimingSummary = interactionTimings.summary(finishedDate: Date())
             self.interactionTimings = nil
+        }
+        let continuesConversation = shouldListenForFollowUp && currentRequestWasSpoken && settings.followUpListeningEnabled
+        shouldListenForFollowUp = false
+        if continuesConversation && startFollowUpListening(afterAnswer: lastAnswerText) {
+            return
         }
         if overlayController.isShowingPointing {
             // The pointing watcher hides the overlay once the user clicks or the window moves.

@@ -19,6 +19,8 @@ final class OpenRouterClient: @unchecked Sendable {
     }
 
     private let urlSession: URLSession
+    /// Told about the cost of every request, with what it was for (set once at startup).
+    var onUsage: (@Sendable (TokenUsage, UsagePurpose) -> Void)?
 
     init() {
         let configuration = URLSessionConfiguration.default
@@ -27,7 +29,8 @@ final class OpenRouterClient: @unchecked Sendable {
         urlSession = URLSession(configuration: configuration)
     }
 
-    func streamChatCompletion(requestBody: Data, apiKey: String) -> AsyncThrowingStream<LLMStreamEvent, Error> {
+    func streamChatCompletion(requestBody: Data, apiKey: String, purpose: UsagePurpose = .questions) -> AsyncThrowingStream<LLMStreamEvent, Error> {
+        let onUsage = self.onUsage
         AsyncThrowingStream { continuation in
             let streamingTask = Task {
                 do {
@@ -55,6 +58,7 @@ final class OpenRouterClient: @unchecked Sendable {
                         switch ServerSentEventLineParser.parse(line) {
                         case .data(let payload):
                             for event in try decoder.consume(dataPayload: payload) {
+                                if case .usage(let usage) = event { onUsage?(usage, purpose) }
                                 continuation.yield(event)
                             }
                         case .done:
@@ -64,6 +68,7 @@ final class OpenRouterClient: @unchecked Sendable {
                         }
                     }
                     for event in decoder.finish() {
+                        if case .usage(let usage) = event { onUsage?(usage, purpose) }
                         continuation.yield(event)
                     }
                     continuation.finish()
@@ -78,9 +83,9 @@ final class OpenRouterClient: @unchecked Sendable {
     }
 
     /// Runs a streaming request and gathers the whole answer. Used by calibration, where nothing is spoken.
-    func collectChatCompletion(requestBody: Data, apiKey: String) async throws -> CollectedResponse {
+    func collectChatCompletion(requestBody: Data, apiKey: String, purpose: UsagePurpose) async throws -> CollectedResponse {
         var collectedResponse = CollectedResponse(text: "", toolCalls: [], usage: nil)
-        for try await event in streamChatCompletion(requestBody: requestBody, apiKey: apiKey) {
+        for try await event in streamChatCompletion(requestBody: requestBody, apiKey: apiKey, purpose: purpose) {
             switch event {
             case .textDelta(let text):
                 collectedResponse.text += text
@@ -124,6 +129,17 @@ final class OpenRouterClient: @unchecked Sendable {
             totalCredits: (balance["total_credits"] as? NSNumber)?.doubleValue ?? 0,
             totalUsage: (balance["total_usage"] as? NSNumber)?.doubleValue ?? 0
         )
+    }
+
+    /// OpenRouter's usage numbers for this API key (today, this week, this month).
+    func fetchKeyUsage(apiKey: String) async throws -> OpenRouterKeyUsage {
+        let request = makeRequest(path: "key", apiKey: apiKey)
+        let (data, response) = try await urlSession.data(for: request)
+        try Self.throwIfUnsuccessful(response: response, data: data)
+        guard let usage = OpenRouterKeyUsage.parse(data) else {
+            throw OpenRouterAPIError(httpStatusCode: nil, message: "Răspuns neașteptat pentru consum.")
+        }
+        return usage
     }
 
     private func makeRequest(path: String, apiKey: String?) -> URLRequest {

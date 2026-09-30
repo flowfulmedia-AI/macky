@@ -665,7 +665,7 @@ private struct ConnectionsSettingsTab: View {
 
 // MARK: - Routines
 
-private struct RoutinesSettingsTab: View {
+struct RoutinesSettingsTab: View {
     @ObservedObject var routineStore: RoutineStore
     @ObservedObject var session: CompanionSession
     @State private var selectedIdentifier: UUID?

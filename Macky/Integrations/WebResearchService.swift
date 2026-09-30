@@ -32,7 +32,7 @@ final class WebResearchService {
                 enableWebSearch: true,
                 maximumResponseTokens: 1500
             )
-            let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey)
+            let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey, purpose: .web)
             return (response.text.isEmpty ? "No results." : response.text, response.usage?.costInCredits)
         } catch {
             return ("Search failed: \(CompanionSession.userFacingMessage(for: error))", nil)

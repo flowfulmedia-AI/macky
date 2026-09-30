@@ -1,7 +1,7 @@
 import MackyCore
 import SwiftUI
 
-/// Content of the menu bar panel: status, onboarding, model switch, last answer, typed questions.
+/// The panel under the notch (or the menu bar icon): Macky's face, the answer, suggestions, and quick input.
 struct CompanionPanelView: View {
     @ObservedObject var session: CompanionSession
     @ObservedObject var settings: AppSettings
@@ -9,7 +9,10 @@ struct CompanionPanelView: View {
     @ObservedObject var apiKeyStore: OpenRouterAPIKeyStore
     @ObservedObject var modelCatalogStore: ModelCatalogStore
     @ObservedObject var agentManager: BackgroundAgentManager
+    @ObservedObject var usageStore: UsageStore
 
+    let suggestions: [SuggestionCatalog.Suggestion]
+    let openHome: () -> Void
     let openSettings: () -> Void
     let openCalibration: () -> Void
     let openMemory: () -> Void
@@ -22,151 +25,232 @@ struct CompanionPanelView: View {
             header
 
             if !apiKeyStore.hasAPIKey || !permissions.allPermissionsGranted {
-                OnboardingChecklistView(permissions: permissions, apiKeyStore: apiKeyStore, openSettings: openSettings)
+                ScrollView {
+                    OnboardingChecklistView(permissions: permissions, apiKeyStore: apiKeyStore, openSettings: openSettings)
+                }
             } else {
-                hotkeyHints
+                if let transcriberStatusText = session.transcriberStatusText {
+                    Label(transcriberStatusText, systemImage: "arrow.down.circle")
+                        .font(MackyDesign.rounded(11))
+                        .foregroundColor(MackyDesign.textSecondary)
+                }
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if session.lastQuestionText.isEmpty && session.lastAnswerText.isEmpty {
+                            emptyState
+                        } else {
+                            conversation
+                        }
+                        if !agentManager.jobs.isEmpty {
+                            BackgroundJobsView(agentManager: agentManager)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxHeight: .infinity)
+                modelSwitch
+                inputRow
             }
-
-            if let transcriberStatusText = session.transcriberStatusText {
-                Label(transcriberStatusText, systemImage: "arrow.down.circle")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            modelSwitch
-            if !agentManager.jobs.isEmpty {
-                BackgroundJobsView(agentManager: agentManager)
-            }
-            conversationCard
-            questionField
-            Spacer(minLength: 0)
             footer
         }
-        .padding(16)
+        .padding(.horizontal, 6)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
+
+    // MARK: Header
 
     private var header: some View {
         HStack(spacing: 10) {
-            MackyCursorShape()
-                .fill(MackyDesign.accentGradient)
-                .frame(width: 20, height: 20)
-            Text("Macky")
-                .font(.system(size: 17, weight: .bold, design: .rounded))
+            MackyMascotView(mood: mascotMood, size: 38)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Macky").font(MackyDesign.rounded(17, .bold)).foregroundColor(MackyDesign.textPrimary)
+                Text(session.state.displayName)
+                    .font(MackyDesign.rounded(11, .medium))
+                    .foregroundColor(stateColor)
+            }
             Spacer()
-            Text(session.state.displayName)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(stateColor.opacity(0.2)))
-                .foregroundColor(stateColor)
+            creditPill
+            Button(action: openHome) { Image(systemName: "square.grid.2x2") }
+                .buttonStyle(MackyIconButtonStyle())
+                .help("Deschide Macky")
+            Button(action: openSettings) { Image(systemName: "gearshape") }
+                .buttonStyle(MackyIconButtonStyle())
+                .help("Setări")
+        }
+    }
+
+    private var creditPill: some View {
+        Button(action: openHome) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(creditColor)
+                    .frame(width: 7, height: 7)
+                Text(usageStore.remainingCredit.map(UsageStore.format) ?? "—")
+                    .font(MackyDesign.rounded(12, .semibold))
+                    .foregroundColor(MackyDesign.textPrimary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(MackyDesign.surface))
+            .overlay(Capsule().stroke(MackyDesign.hairline, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Credit OpenRouter rămas · azi \(UsageStore.format(usageStore.ledger.totalCost(lastDays: 1)))")
+        .pointingHandOnHover()
+    }
+
+    private var creditColor: Color {
+        guard let remainingCredit = usageStore.remainingCredit else { return MackyDesign.textSecondary }
+        return remainingCredit < UsageStore.lowBalanceThreshold ? .orange : MackyDesign.accent
+    }
+
+    private var mascotMood: MackyMood {
+        switch session.state {
+        case .idle: return .idle
+        case .listening: return .listening
+        case .transcribing, .thinking: return .thinking
+        case .speaking: return .speaking
+        case .failed: return .error
         }
     }
 
     private var stateColor: Color {
         switch session.state {
-        case .idle: return .secondary
+        case .idle: return MackyDesign.textSecondary
         case .failed: return .orange
         default: return MackyDesign.accent
         }
     }
 
-    private var hotkeyHints: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            hintRow(symbols: settings.talkCombination.symbols, text: "ține apăsat și întreabă ce vezi pe ecran")
-            if let dictationCombination = settings.dictationCombination {
-                hintRow(symbols: dictationCombination.symbols, text: "ține apăsat și dictează text în orice aplicație")
+    // MARK: Content
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Cu ce te ajut?")
+                .font(MackyDesign.rounded(20, .bold))
+                .foregroundColor(MackyDesign.textPrimary)
+            Text("Ține \(settings.talkCombination.symbols) și vorbește, sau alege o idee:")
+                .font(MackyDesign.rounded(13))
+                .foregroundColor(MackyDesign.textSecondary)
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                    SuggestionCardView(
+                        text: suggestion.text,
+                        symbol: suggestion.symbol,
+                        color: MackyDesign.pastels[index % MackyDesign.pastels.count],
+                        tilt: [-2.0, 1.5, -1.0][index % 3]
+                    ) {
+                        session.ask(typedQuestion: suggestion.text)
+                    }
+                }
             }
+            .padding(.top, 4)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: MackyDesign.cornerRadius).fill(MackyDesign.cardBackground))
     }
 
-    private func hintRow(symbols: String, text: String) -> some View {
-        HStack(spacing: 8) {
-            Text(symbols)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.1)))
-            Text(text)
-                .font(.callout)
-                .foregroundColor(.secondary)
+    private var conversation: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if !session.lastQuestionText.isEmpty {
+                Text(session.lastQuestionText)
+                    .font(MackyDesign.rounded(13, .medium))
+                    .foregroundColor(MackyDesign.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(MackyDesign.surfaceStrong))
+                    .frame(maxWidth: 300, alignment: .trailing)
+                    .textSelection(.enabled)
+            }
+            if !session.lastAnswerText.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(session.lastAnswerText)
+                        .font(MackyDesign.rounded(14))
+                        .foregroundColor(MackyDesign.textPrimary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 8) {
+                        if let lastTimingSummary = session.lastTimingSummary {
+                            Text(lastTimingSummary.replacingOccurrences(of: "Ultima cerere: ", with: ""))
+                                .font(MackyDesign.rounded(10))
+                                .foregroundColor(MackyDesign.textSecondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(session.lastAnswerText, forType: .string)
+                        } label: { Image(systemName: "doc.on.doc") }
+                            .buttonStyle(MackyIconButtonStyle())
+                            .help("Copiază răspunsul")
+                        Button { session.forgetConversation() } label: { Image(systemName: "plus.bubble") }
+                            .buttonStyle(MackyIconButtonStyle())
+                            .help("Conversație nouă")
+                    }
+                }
+                .mackyCard()
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private var modelSwitch: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker("", selection: $settings.usePowerfulModel) {
-                Text("Rapid").tag(false)
-                Text("Puternic").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+        HStack(spacing: 6) {
+            modelChip(title: "Rapid", symbol: "bolt.fill", isSelected: !settings.usePowerfulModel) { settings.usePowerfulModel = false }
+            modelChip(title: "Puternic", symbol: "sparkles", isSelected: settings.usePowerfulModel) { settings.usePowerfulModel = true }
             Text(activeModelDescription)
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(MackyDesign.rounded(10))
+                .foregroundColor(MackyDesign.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
     }
 
+    private func modelChip(title: String, symbol: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(MackyDesign.rounded(12, .semibold))
+                .foregroundColor(isSelected ? Color(red: 0.08, green: 0.10, blue: 0.25) : MackyDesign.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(isSelected ? AnyShapeStyle(MackyDesign.primaryButtonGradient) : AnyShapeStyle(MackyDesign.surface)))
+        }
+        .buttonStyle(.plain)
+        .pointingHandOnHover()
+    }
+
     private var activeModelDescription: String {
         let identifier = settings.activeModelIdentifier
-        guard !identifier.isEmpty else { return "Niciun model ales — deschide Setări" }
+        guard !identifier.isEmpty else { return "Alege un model în Setări" }
         return modelCatalogStore.model(withIdentifier: identifier)?.name ?? identifier
     }
 
-    private var conversationCard: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                if session.lastQuestionText.isEmpty && session.lastAnswerText.isEmpty {
-                    Text("Întreabă orice despre ce e pe ecran: „Unde export video aici?”, „Ce înseamnă eroarea asta?”, „Cum schimb fontul?”")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                } else {
-                    if !session.lastQuestionText.isEmpty {
-                        Text(session.lastQuestionText)
-                            .font(.callout.weight(.semibold))
-                            .textSelection(.enabled)
-                    }
-                    if !session.lastAnswerText.isEmpty {
-                        Text(session.lastAnswerText)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-        }
-        .frame(maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: MackyDesign.cornerRadius).fill(MackyDesign.cardBackground))
-    }
+    // MARK: Input
 
-    private var questionField: some View {
+    private var inputRow: some View {
         HStack(spacing: 8) {
-            TextField("Sau scrie o întrebare…", text: $typedQuestion)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(submitTypedQuestion)
-            Button(action: submitTypedQuestion) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(MackyDesign.accentGradient)
-            }
-            .buttonStyle(.plain)
-            .disabled(typedQuestion.trimmingCharacters(in: .whitespaces).isEmpty)
-            .pointingHandOnHover()
-            if session.state.isBusy {
-                Button(action: { session.stopEverything() }) {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 20))
+            HoldToTalkButton(session: session, title: "Ține \(settings.talkCombination.symbols) ca să vorbești")
+            HStack(spacing: 6) {
+                Image(systemName: "keyboard").foregroundColor(MackyDesign.textSecondary)
+                TextField("Scrie…", text: $typedQuestion)
+                    .textFieldStyle(.plain)
+                    .font(MackyDesign.rounded(13))
+                    .onSubmit(submitTypedQuestion)
+                if session.state.isBusy {
+                    Button { session.stopEverything() } label: { Image(systemName: "stop.fill") }
+                        .buttonStyle(.plain)
                         .foregroundColor(.orange)
+                        .help("Oprește")
+                } else if !typedQuestion.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button(action: submitTypedQuestion) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 17)) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MackyDesign.primaryButtonGradient)
                 }
-                .buttonStyle(.plain)
-                .help("Oprește")
-                .pointingHandOnHover()
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(MackyDesign.surface))
+            .overlay(Capsule().stroke(MackyDesign.hairline, lineWidth: 1))
         }
     }
 
@@ -177,54 +261,90 @@ struct CompanionPanelView: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(costSummary)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            if let lastTimingSummary = session.lastTimingSummary {
-                Text(lastTimingSummary)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            HStack(spacing: 14) {
-                footerButton("Setări", systemImage: "gearshape", action: openSettings)
-                footerButton("Memorie", systemImage: "brain", action: openMemory)
-                footerButton("Istoric", systemImage: "clock.arrow.circlepath", action: openHistory)
-                Spacer()
-                footerButton("Calibrare", systemImage: "scope", iconOnly: true, action: openCalibration)
-                    .help("Calibrare")
-                footerButton("Conversație nouă", systemImage: "arrow.counterclockwise", iconOnly: true, action: { session.forgetConversation() })
-                    .help("Începe o conversație nouă")
-                footerButton("Ieșire", systemImage: "power", iconOnly: true) { NSApp.terminate(nil) }
-                    .help("Ieșire")
-            }
+        HStack(spacing: 14) {
+            footerButton("Memorie", systemImage: "brain", action: openMemory)
+            footerButton("Istoric", systemImage: "clock.arrow.circlepath", action: openHistory)
+            Spacer()
+            Text(sessionCostText)
+                .font(MackyDesign.rounded(10))
+                .foregroundColor(MackyDesign.textSecondary)
+            footerButton("Calibrare", systemImage: "scope", iconOnly: true, action: openCalibration)
+                .help("Calibrare")
+            footerButton("Ieșire", systemImage: "power", iconOnly: true) { NSApp.terminate(nil) }
+                .help("Ieșire din Macky")
         }
     }
 
-    private var costSummary: String {
+    private var sessionCostText: String {
         let tracker = session.costTracker
-        guard tracker.requestCount > 0 else { return "Sesiune: nicio cerere încă" }
-        var summary = "Sesiune: \(SessionCostTracker.formatCredits(tracker.totalCostInCredits)) · \(tracker.requestCount) cereri"
-        if let lastCost = tracker.lastRequestCostInCredits {
-            summary += " · ultima \(SessionCostTracker.formatCredits(lastCost))"
-        }
-        return summary
+        guard tracker.requestCount > 0 else { return "" }
+        return "sesiune \(SessionCostTracker.formatCredits(tracker.totalCostInCredits))"
     }
 
     private func footerButton(_ title: String, systemImage: String, iconOnly: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             if iconOnly {
                 Image(systemName: systemImage)
-                    .font(.caption)
+                    .font(.system(size: 11, weight: .medium))
                     .accessibilityLabel(title)
             } else {
                 Label(title, systemImage: systemImage)
-                    .font(.caption)
+                    .font(MackyDesign.rounded(11, .medium))
             }
         }
         .buttonStyle(.plain)
-        .foregroundColor(.secondary)
+        .foregroundColor(MackyDesign.textSecondary)
         .pointingHandOnHover()
+    }
+}
+
+/// The glowing pill: hold the mouse button on it to talk, like holding the shortcut.
+struct HoldToTalkButton: View {
+    @ObservedObject var session: CompanionSession
+    let title: String
+    @State private var isHolding = false
+
+    var body: some View {
+        Label(isHolding ? "Eliberează ca să trimiți" : title, systemImage: "mic.fill")
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
+            .modifier(PrimaryPillLook(isActive: isHolding || session.state == .listening))
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !isHolding else { return }
+                        isHolding = true
+                        session.handle(.pressed(.talk))
+                    }
+                    .onEnded { _ in
+                        isHolding = false
+                        session.handle(.released(.talk))
+                    }
+            )
+            .pointingHandOnHover()
+    }
+}
+
+/// The primary pill look for views that are not buttons.
+struct PrimaryPillLook: ViewModifier {
+    var isActive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(MackyDesign.rounded(14, .semibold))
+            .foregroundColor(Color(red: 0.08, green: 0.10, blue: 0.25))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(MackyDesign.primaryButtonGradient)
+                    .overlay(Capsule().stroke(MackyDesign.primaryButtonGlow.opacity(0.9), lineWidth: 1.5))
+            )
+            .shadow(color: MackyDesign.primaryButtonGlow.opacity(isActive ? 0.95 : 0.45), radius: isActive ? 16 : 8)
+            .scaleEffect(isActive ? 1.02 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isActive)
     }
 }
 
@@ -237,7 +357,7 @@ struct OnboardingChecklistView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Hai să te pregătim")
-                .font(.headline)
+                .font(MackyDesign.rounded(17, .bold))
 
             checklistRow(
                 isDone: apiKeyStore.hasAPIKey,
@@ -267,8 +387,7 @@ struct OnboardingChecklistView: View {
                 }
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: MackyDesign.cornerRadius).fill(MackyDesign.cardBackground))
+        .mackyCard()
     }
 
     private func checklistRow(isDone: Bool, title: String, explanation: String, buttonTitle: String, action: @escaping () -> Void) -> some View {
@@ -310,8 +429,7 @@ struct BackgroundJobsView: View {
                 jobRow(job)
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: MackyDesign.cornerRadius).fill(MackyDesign.cardBackground))
+        .mackyCard()
     }
 
     private func jobRow(_ job: BackgroundAgentManager.Job) -> some View {

@@ -232,14 +232,14 @@ final class MemoryManager: ObservableObject {
             maximumResponseTokens: maximumResponseTokens
         )
         do {
-            return try await openRouterClient.collectChatCompletion(requestBody: body, apiKey: apiKey).text
+            return try await openRouterClient.collectChatCompletion(requestBody: body, apiKey: apiKey, purpose: .memory).text
         } catch let apiError as OpenRouterAPIError where apiError.httpStatusCode == 400 {
             // Some providers reject the reasoning switch; try once without it.
             let plainBody = try OpenRouterRequestBuilder.makeChatCompletionBody(
                 modelIdentifier: modelIdentifier, messages: messages, tools: [], coordinateConvention: .imagePixels,
                 maximumResponseTokens: maximumResponseTokens
             )
-            return try await openRouterClient.collectChatCompletion(requestBody: plainBody, apiKey: apiKey).text
+            return try await openRouterClient.collectChatCompletion(requestBody: plainBody, apiKey: apiKey, purpose: .memory).text
         }
     }
 

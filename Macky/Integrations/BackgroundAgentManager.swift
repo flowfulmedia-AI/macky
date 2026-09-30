@@ -102,7 +102,7 @@ final class BackgroundAgentManager: ObservableObject {
                     coordinateConvention: .imagePixels,
                     maximumResponseTokens: 4000
                 )
-                let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey)
+                let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey, purpose: .agents)
                 addCost(response.usage?.costInCredits, to: jobIdentifier)
                 guard !Task.isCancelled else { return }
 

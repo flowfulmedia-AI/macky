@@ -50,7 +50,7 @@ private final class NotchPanel: KeyablePanel {
 /// moving away folds it back. While Macky is busy, a small live indicator hugs the notch.
 @MainActor
 final class NotchPanelController {
-    static let expandedContentSize = NSSize(width: 400, height: 560)
+    static let expandedContentSize = NSSize(width: 430, height: 600)
     /// Room left and right of the notch for the live indicator.
     private static let liveIndicatorExtraWidth: CGFloat = 96
     private static let hoverDelayBeforeExpanding: TimeInterval = 0.12

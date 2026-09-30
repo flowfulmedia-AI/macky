@@ -157,7 +157,7 @@ final class CalibrationRunner: ObservableObject {
                     tools: useToolCalling ? [.pointAt] : [],
                     coordinateConvention: coordinateConvention
                 )
-                let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey)
+                let response = try await openRouterClient.collectChatCompletion(requestBody: requestBody, apiKey: apiKey, purpose: .calibration)
                 let latency = Date().timeIntervalSince(startDate)
 
                 var instruction = response.toolCalls

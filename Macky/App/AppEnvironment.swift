@@ -22,6 +22,7 @@ final class AppEnvironment {
     let routineStore = RoutineStore()
     let mcpConnectionStore = MCPConnectionStore()
     let zoomMeetingsManager: ZoomMeetingsManager
+    let usageStore: UsageStore
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -32,6 +33,12 @@ final class AppEnvironment {
 
     init() {
         modelCatalogStore = ModelCatalogStore(openRouterClient: openRouterClient)
+        let usageStore = UsageStore(apiKeyStore: apiKeyStore, openRouterClient: openRouterClient)
+        self.usageStore = usageStore
+        // Every request's cost goes into the usage ledger, with what it was for.
+        openRouterClient.onUsage = { usage, purpose in
+            Task { @MainActor in usageStore.record(usage, purpose: purpose) }
+        }
         memoryManager = MemoryManager(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient)
         historyStore = HistoryStore(settings: settings)
         skillLibrary = SkillLibrary(settings: settings)
@@ -92,6 +99,7 @@ final class AppEnvironment {
         routineStore.startScheduler()
         Task { await mcpConnectionStore.refreshAll() }
         zoomMeetingsManager.start()
+        usageStore.start()
 
         Task {
             await modelCatalogStore.refresh()
@@ -117,11 +125,42 @@ final class AppEnvironment {
             apiKeyStore: apiKeyStore,
             modelCatalogStore: modelCatalogStore,
             agentManager: companionSession.backgroundAgentManager,
+            usageStore: usageStore,
+            suggestions: currentSuggestions(),
+            openHome: { [unowned self] in self.openHome() },
             openSettings: { [unowned self] in self.openSettings() },
             openCalibration: { [unowned self] in self.openCalibration() },
             openMemory: { [unowned self] in self.openMemory() },
             openHistory: { [unowned self] in self.openHistory() }
         ))
+    }
+
+    /// Starter ideas that fit what is connected and the time of day.
+    private func currentSuggestions() -> [SuggestionCatalog.Suggestion] {
+        SuggestionCatalog.suggestions(
+            hasGoogle: googleAccountManager.isConnected,
+            hasTaskApp: mcpConnectionStore.toolNamesByServer.values.contains { names in names.contains { $0.lowercased().contains("task") } },
+            hasZoom: zoomMeetingsManager.hasCredentials,
+            hour: Calendar.current.component(.hour, from: Date())
+        )
+    }
+
+    private func openHome() {
+        hidePanels()
+        _ = windowCoordinator.showWindow(identifier: "home", title: "Macky", size: NSSize(width: 1080, height: 720), transparentTitleBar: true) {
+            HomeView(
+                session: companionSession,
+                settings: settings,
+                usageStore: usageStore,
+                agentManager: companionSession.backgroundAgentManager,
+                zoomMeetingsManager: zoomMeetingsManager,
+                memoryManager: memoryManager,
+                historyStore: historyStore,
+                routineStore: routineStore,
+                suggestions: currentSuggestions(),
+                openSettings: { [unowned self] in self.openSettings() }
+            )
+        }
     }
 
     /// Notch panel, menu bar icon, or both. Without a notch panel the icon is always shown,

@@ -10,7 +10,7 @@ class KeyablePanel: NSPanel {
 /// Menu bar icon plus the dark floating panel that opens under it.
 @MainActor
 final class MenuBarController: NSObject {
-    private static let panelSize = NSSize(width: 380, height: 560)
+    private static let panelSize = NSSize(width: 430, height: 600)
 
     private var statusItem: NSStatusItem?
     private var panel: KeyablePanel?
@@ -136,19 +136,30 @@ struct VisualEffectBackground: NSViewRepresentable {
 final class WindowCoordinator {
     private var windowsByIdentifier: [String: NSWindow] = [:]
 
-    func showWindow<Content: View>(identifier: String, title: String, size: NSSize, content: () -> Content) -> NSWindow {
+    func showWindow<Content: View>(identifier: String, title: String, size: NSSize, transparentTitleBar: Bool = false,
+                                   content: () -> Content) -> NSWindow {
         if let existingWindow = windowsByIdentifier[identifier] {
             NSApp.activate(ignoringOtherApps: true)
             existingWindow.makeKeyAndOrderFront(nil)
             return existingWindow
         }
+        var styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        if transparentTitleBar { styleMask.insert(.fullSizeContentView) }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
         window.title = title
+        // All of Macky's windows share the dark look of the panel.
+        window.appearance = NSAppearance(named: .darkAqua)
+        if transparentTitleBar {
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.backgroundColor = NSColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
+        }
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: content())
         window.center()

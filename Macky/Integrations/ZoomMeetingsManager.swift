@@ -216,9 +216,9 @@ final class ZoomMeetingsManager: ObservableObject {
             )
         }
         do {
-            return try await openRouterClient.collectChatCompletion(requestBody: body(disableReasoning: settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier)), apiKey: apiKey).text
+            return try await openRouterClient.collectChatCompletion(requestBody: body(disableReasoning: settings.shouldDisableReasoning(forModelIdentifier: modelIdentifier)), apiKey: apiKey, purpose: .meetings).text
         } catch let apiError as OpenRouterAPIError where apiError.httpStatusCode == 400 {
-            return try await openRouterClient.collectChatCompletion(requestBody: body(disableReasoning: false), apiKey: apiKey).text
+            return try await openRouterClient.collectChatCompletion(requestBody: body(disableReasoning: false), apiKey: apiKey, purpose: .meetings).text
         }
     }
 

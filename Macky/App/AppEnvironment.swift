@@ -254,6 +254,7 @@ final class AppEnvironment {
         hidePanels()
         _ = windowCoordinator.showWindow(identifier: "memory", title: "Memoria lui Macky", size: NSSize(width: 860, height: 680), transparentTitleBar: true) {
             MemoryView(memoryManager: memoryManager, settings: settings)
+                .frame(minWidth: 640, minHeight: 480)
         }
     }
 

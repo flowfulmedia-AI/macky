@@ -196,7 +196,7 @@ struct HomeView: View {
         case .meetings:
             MeetingsSectionView(manager: zoomMeetingsManager, openSettings: openSettings)
         case .memory:
-            MemoryView(memoryManager: memoryManager, settings: settings)
+            MemoryView(memoryManager: memoryManager, settings: settings, compact: true)
         case .history:
             HistoryView(historyStore: historyStore, settings: settings)
         case .routines:

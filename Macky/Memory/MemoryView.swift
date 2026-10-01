@@ -5,6 +5,8 @@ import SwiftUI
 struct MemoryView: View {
     @ObservedObject var memoryManager: MemoryManager
     @ObservedObject var settings: AppSettings
+    /// Inside the notch panel and the Home window: less padding, no minimum size, shorter tab labels.
+    var compact = false
     @State private var tab: Tab = .items
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -14,7 +16,7 @@ struct MemoryView: View {
             switch self {
             case .items: return "Amintiri"
             case .profile: return "Profil"
-            case .procedures: return "Proceduri învățate"
+            case .procedures: return "Proceduri"
             case .settings: return "Setări"
             }
         }
@@ -31,15 +33,17 @@ struct MemoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
-                MackyMascotView(mood: .happy, size: 30)
+                MackyMascotView(mood: .happy, size: compact ? 24 : 30)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Memoria lui Macky").font(MackyDesign.rounded(22, .bold)).foregroundColor(MackyDesign.textPrimary)
+                    Text("Memoria lui Macky").font(MackyDesign.rounded(compact ? 18 : 22, .bold)).foregroundColor(MackyDesign.textPrimary)
                     Text("Ce știe despre tine, ce a învățat și cum folosește memoria.")
-                        .font(MackyDesign.rounded(13))
+                        .font(MackyDesign.rounded(compact ? 12 : 13))
                         .foregroundColor(MackyDesign.textSecondary)
+                        .lineLimit(2)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Tab.allCases) { item in
                     Button {
@@ -57,10 +61,10 @@ struct MemoryView: View {
                     .buttonStyle(.plain)
                     .pointingHandOnHover()
                 }
-                Spacer()
             }
             .padding(4)
             .background(Capsule().fill(MackyDesign.surface))
+            }
 
             Group {
                 switch tab {
@@ -72,13 +76,13 @@ struct MemoryView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 38)
-        .padding(.bottom, 20)
-        .background(MackyDesign.windowBackground)
+        .padding(.horizontal, compact ? 18 : 28)
+        .padding(.top, compact ? 18 : 38)
+        .padding(.bottom, compact ? 14 : 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(compact ? Color.clear : MackyDesign.windowBackground)
         .environment(\.colorScheme, .dark)
         .toggleStyle(MackyToggleStyle())
-        .frame(minWidth: 640, minHeight: 480)
     }
 }
 
@@ -118,7 +122,7 @@ private struct MemoryItemsTab: View {
                 .padding(.vertical, 9)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(MackyDesign.hairline, lineWidth: 1))
-                .frame(maxWidth: .infinity)
+                .frame(minWidth: 120, maxWidth: .infinity)
                 Picker("", selection: $kindFilter) {
                     Text("Toate").tag(MemoryKind?.none)
                     ForEach(MemoryKind.allCases, id: \.self) { kind in

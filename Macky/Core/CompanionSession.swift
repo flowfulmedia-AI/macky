@@ -78,8 +78,6 @@ final class CompanionSession: ObservableObject {
     private var currentInteractionTask: Task<Void, Never>?
     private var activeRecordingPurpose: HotkeyAction?
     private var isAnswerStreamComplete = false
-    /// Set by a step whose result must be checked on a fresh screenshot (a WhatsApp group message typed but not sent).
-    private var screenCheckRequested = false
     /// Set when the user answers "Da pentru tot": no more confirmation cards until the next question.
     private var areActionsApprovedForCurrentQuestion = false
     private var interactionTimings: InteractionTimings?
@@ -261,6 +259,7 @@ final class CompanionSession: ObservableObject {
         stopEverything()
         guard ensureMicrophoneAccess() else { return }
         do {
+            audioRecorder.microphonePreference = settings.microphonePreference
             try audioRecorder.startRecording()
         } catch {
             _ = startNewInteraction()
@@ -535,6 +534,7 @@ final class CompanionSession: ObservableObject {
     private func startFollowUpListening(afterAnswer answer: String) -> Bool {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, !audioRecorder.isRecording else { return false }
         do {
+            audioRecorder.microphonePreference = settings.microphonePreference
             try audioRecorder.startRecording()
         } catch {
             return false
@@ -784,6 +784,14 @@ final class CompanionSession: ObservableObject {
         overlayController.hideImmediately()
     }
 
+    static func silenceMessage(for recordedAudio: RecordedAudio) -> String {
+        if recordedAudio.peakLevel < 0.003 {
+            let microphone = recordedAudio.microphoneName.map { "„\($0)”" } ?? "Microfonul"
+            return "\(microphone) nu a prins niciun sunet. Alege alt microfon în Setări → Voce și limbă."
+        }
+        return "Nu am înțeles. Ține apăsat, vorbește, apoi eliberează."
+    }
+
     /// Returns nil (after showing an error) when nothing usable was heard.
     private func transcribe(_ recordedAudio: RecordedAudio, interactionIdentifier: UUID, reportsSilence: Bool = true) async -> String? {
         prepareTranscriber()
@@ -804,12 +812,10 @@ final class CompanionSession: ObservableObject {
             earlyTranscription = nil
             guard isCurrent(interactionIdentifier) else { return nil }
             let cleanedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Whisper sometimes "hears" these in silence.
-            let silenceHallucinations: Set<String> = ["", ".", "...", "[BLANK_AUDIO]", "(silence)", "Mulțumesc.", "Thank you."]
-            let looksLikeSilence = cleanedTranscript.isEmpty
-                || (silenceHallucinations.contains(cleanedTranscript) && recordedAudio.durationInSeconds < 2.5)
+            // Whisper "hears" video outros ("Vă mulțumim pentru vizionare") in silence.
+            let looksLikeSilence = cleanedTranscript.isEmpty || cleanedTranscript == "[BLANK_AUDIO]" || TranscriptFilter.isPhantom(cleanedTranscript)
             guard !looksLikeSilence else {
-                if reportsSilence { fail(with: "Nu am auzit nimic. Ține apăsat și vorbește, apoi eliberează.") }
+                if reportsSilence { fail(with: Self.silenceMessage(for: recordedAudio)) }
                 return nil
             }
             return cleanedTranscript
@@ -990,6 +996,7 @@ final class CompanionSession: ObservableObject {
         // For learning: what was done, and whether anything went wrong.
         var executedToolCalls: [ChatToolCall] = []
         var failureReasons: [String] = []
+        var whatsAppSendFailed = false
         var taskEndedCleanly = true
         isAnswerStreamComplete = false
         // The user set up a routine's actions themselves: no confirmation cards.
@@ -1017,7 +1024,6 @@ final class CompanionSession: ObservableObject {
             let requestedActions = stepResult.toolCalls.compactMap(resolvedAction(for:))
             let modelSaysTaskIsDone = stepResult.toolCalls.contains { $0.name == MackyTool.taskDone.rawValue }
             let onlyScreenlessOperations = !requestedActions.isEmpty && requestedActions.allSatisfy(\.needsNoScreen)
-            screenCheckRequested = false
             guard (actionsEnabled || onlyScreenlessOperations), !requestedActions.isEmpty else {
                 if !isFirstStep && !stepResult.visibleText.isEmpty {
                     // A quiet step that ends with a message (a problem, a question): say it now.
@@ -1062,6 +1068,8 @@ final class CompanionSession: ObservableObject {
                         resultText = "The user declined this action."
                     case .failed(let reason):
                         anyActionFailed = true
+                        // A WhatsApp message that could not be sent ends the task: no improvising in other apps.
+                        if case .whatsAppSend = action { whatsAppSendFailed = true }
                         taskEndedCleanly = false
                         failureReasons.append("\(action.userFacingDescription): \(reason)")
                         resultText = "Failed: \(reason)"
@@ -1078,14 +1086,16 @@ final class CompanionSession: ObservableObject {
                 messages.append(.toolResult(for: toolCall, result: resultText))
             }
 
+            if whatsAppSendFailed { break agentLoop }
+
             // The model said these actions finish the task: no extra screenshot and round trip.
-            if modelSaysTaskIsDone && !userDeclined && !anyActionFailed && !screenCheckRequested {
+            if modelSaysTaskIsDone && !userDeclined && !anyActionFailed {
                 break agentLoop
             }
 
             // Memory, web and skill tools need no new screenshot. After "remember"/"forget" with an answer already given,
             // the turn is over; after tools that return information the model needs one more step to answer with it.
-            if onlyScreenlessOperations && !screenCheckRequested {
+            if onlyScreenlessOperations {
                 let needsAnotherStep = stepResult.visibleText.isEmpty || requestedActions.contains(where: \.returnsInformation)
                 if !needsAnotherStep || stepNumber == Self.maximumAgentSteps { break agentLoop }
                 state = .thinking
@@ -1171,6 +1181,24 @@ final class CompanionSession: ObservableObject {
         guard isCurrent(interactionIdentifier) else { return }
         if !speechSpeaker.isSpeaking {
             finishInteraction()
+        } else {
+            finishWhenSpeechEnds(interactionIdentifier: interactionIdentifier)
+        }
+    }
+
+    /// Safety net: whatever state the task left behind, once Macky stops talking the bubble and cursor go away.
+    private func finishWhenSpeechEnds(interactionIdentifier: UUID) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<360 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, self.isCurrent(interactionIdentifier) else { return }
+                guard self.isAnswerStreamComplete else { return }
+                if self.state == .idle || self.state == .listening || self.state == .transcribing { return }
+                if !self.speechSpeaker.isSpeaking {
+                    self.finishInteraction()
+                    return
+                }
+            }
         }
     }
 
@@ -1457,9 +1485,7 @@ final class CompanionSession: ObservableObject {
             break
         case .whatsAppSend(let recipient, let text):
             do {
-                let result = try await whatsAppController.send(to: recipient, text: text)
-                if result.needsScreenCheck { screenCheckRequested = true }
-                return .done(action.userFacingDescription, resultDetail: result.detail)
+                return .done(action.userFacingDescription, resultDetail: try await whatsAppController.send(to: recipient, text: text))
             } catch {
                 return .failed(error.localizedDescription)
             }
@@ -1577,7 +1603,8 @@ final class CompanionSession: ObservableObject {
     }
 
     private func speechQueueDrained() {
-        guard isAnswerStreamComplete, state == .speaking else { return }
+        // After a task the state can still read "thinking": finish anyway once the answer is complete.
+        guard isAnswerStreamComplete, state == .speaking || state == .thinking else { return }
         finishInteraction()
     }
 

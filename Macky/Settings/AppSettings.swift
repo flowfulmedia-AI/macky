@@ -99,6 +99,8 @@ final class AppSettings: ObservableObject {
 
     @Published var transcriptionEngine: TranscriptionEngine { didSet { defaults.set(transcriptionEngine.rawValue, forKey: Keys.transcriptionEngine) } }
     @Published var whisperModelVariant: WhisperModelVariant { didSet { defaults.set(whisperModelVariant.rawValue, forKey: Keys.whisperModelVariant) } }
+    /// "" = automatic (the Mac's microphone instead of Bluetooth headphones), "system" = macOS's choice, else a device UID.
+    @Published var microphonePreference: String { didSet { defaults.set(microphonePreference, forKey: Keys.microphonePreference) } }
 
     @Published var talkCombination: ModifierKeys { didSet { defaults.set(talkCombination.rawValue, forKey: Keys.talkCombination) } }
     /// nil disables dictation.
@@ -186,6 +188,7 @@ final class AppSettings: ObservableObject {
         speechRateMultiplier = defaults.double(forKey: Keys.speechRateMultiplier)
         transcriptionEngine = TranscriptionEngine(rawValue: defaults.string(forKey: Keys.transcriptionEngine) ?? "") ?? .whisperKit
         whisperModelVariant = WhisperModelVariant(rawValue: defaults.string(forKey: Keys.whisperModelVariant) ?? "") ?? .small
+        microphonePreference = defaults.string(forKey: Keys.microphonePreference) ?? ""
         talkCombination = ModifierKeys(rawValue: defaults.integer(forKey: Keys.talkCombination))
         let storedDictationCombination = defaults.integer(forKey: Keys.dictationCombination)
         dictationCombination = storedDictationCombination == 0 ? nil : ModifierKeys(rawValue: storedDictationCombination)
@@ -263,6 +266,7 @@ final class AppSettings: ObservableObject {
         static let speechRateMultiplier = "speechRateMultiplier"
         static let transcriptionEngine = "transcriptionEngine"
         static let whisperModelVariant = "whisperModelVariant"
+        static let microphonePreference = "microphonePreference"
         static let talkCombination = "talkCombination"
         static let dictationCombination = "dictationCombination"
         static let captureAllScreens = "captureAllScreens"

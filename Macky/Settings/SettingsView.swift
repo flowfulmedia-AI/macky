@@ -251,6 +251,15 @@ private struct VoicePage: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var session: CompanionSession
 
+    @State private var microphones: [AudioInputDevice] = AudioInputDevices.all()
+
+    private var microphoneSubtitle: String {
+        if let device = AudioInputDevices.resolve(preference: settings.microphonePreference) {
+            return "Acum: \(device.name)"
+        }
+        return "Acum: \(AudioInputDevices.systemDefault()?.name ?? "microfonul implicit")"
+    }
+
     private var availableVoices: [AVSpeechSynthesisVoice] {
         SpeechSpeaker.availableVoices(forLanguageCode: settings.responseLanguage.transcriptionLanguageCode)
     }
@@ -261,6 +270,19 @@ private struct VoicePage: View {
                 SettingsRow(title: "Macky vorbește și înțelege", subtitle: "Limba răspunsurilor și a transcrierii.") {
                     Picker("", selection: $settings.responseLanguage) {
                         ForEach(ResponseLanguage.allCases, id: \.self) { language in Text(language.displayName).tag(language) }
+                    }
+                    .settingsMenu()
+                }
+            }
+
+            SettingsGroup(title: "Microfon", footer: "Căștile Bluetooth (AirPods etc.) trec pe un mod de calitate slabă când li se folosește microfonul, iar transcrierea iese greșit. Pe „Automat”, Macky te ascultă cu microfonul Mac-ului și căștile rămân doar pentru sunet.") {
+                SettingsRow(title: "Macky te ascultă prin", subtitle: microphoneSubtitle) {
+                    Picker("", selection: $settings.microphonePreference) {
+                        Text("Automat (recomandat)").tag(AudioInputDevices.automaticPreference)
+                        Text("Ce folosește macOS").tag(AudioInputDevices.systemPreference)
+                        ForEach(microphones) { device in
+                            Text(device.name + (device.isBluetooth ? " (Bluetooth)" : "")).tag(device.uid)
+                        }
                     }
                     .settingsMenu()
                 }

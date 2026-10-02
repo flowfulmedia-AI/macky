@@ -1,9 +1,28 @@
+import AudioToolbox
 import AVFoundation
 
 struct RecordedAudio {
     /// 16 kHz mono Float32 samples, the format Whisper expects.
     var samples: [Float]
+    /// The microphone it came from, for error messages.
+    var microphoneName: String?
     var durationInSeconds: Double { Double(samples.count) / AudioRecorder.transcriptionSampleRate }
+
+    /// The loudest tenth of a second (RMS). Near zero means the microphone delivered silence.
+    var peakLevel: Float {
+        let window = Int(AudioRecorder.transcriptionSampleRate / 10)
+        guard !samples.isEmpty else { return 0 }
+        var peak: Float = 0
+        var start = 0
+        while start < samples.count {
+            let end = min(start + window, samples.count)
+            var sum: Float = 0
+            for index in start..<end { sum += samples[index] * samples[index] }
+            peak = max(peak, (sum / Float(end - start)).squareRoot())
+            start = end
+        }
+        return peak
+    }
 }
 
 enum AudioRecorderError: LocalizedError {
@@ -33,14 +52,30 @@ final class AudioRecorder {
 
     var isRecording: Bool { audioEngine != nil }
 
+    /// The microphone preference from settings (see AudioInputDevices).
+    var microphonePreference = AudioInputDevices.automaticPreference
+    private(set) var currentMicrophoneName: String?
+    private var configurationObserver: NSObjectProtocol?
+
     func startRecording() throws {
         stopEngine()
         recordedSamplesLock.lock()
         recordedSamples.removeAll(keepingCapacity: true)
         recordedSamplesLock.unlock()
+        try startEngine()
+    }
 
+    /// Starts (or restarts, after the device changed) the engine without clearing what was recorded.
+    private func startEngine() throws {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
+        let chosenDevice = AudioInputDevices.resolve(preference: microphonePreference)
+        if let chosenDevice, let audioUnit = inputNode.audioUnit {
+            var deviceID = chosenDevice.id
+            AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                 &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
+        currentMicrophoneName = chosenDevice?.name ?? AudioInputDevices.systemDefault()?.name
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noInputDevice
@@ -56,6 +91,14 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         audioEngine = engine
+
+        // Headphones connecting, or switching to their headset mode, change the format mid-recording:
+        // without a restart the engine stops delivering sound.
+        configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            guard let self, self.audioEngine === engine else { return }
+            self.stopEngine()
+            try? self.startEngine()
+        }
     }
 
     func stopRecording() -> RecordedAudio {
@@ -64,7 +107,7 @@ final class AudioRecorder {
         let samples = recordedSamples
         recordedSamples.removeAll()
         recordedSamplesLock.unlock()
-        return RecordedAudio(samples: samples)
+        return RecordedAudio(samples: samples, microphoneName: currentMicrophoneName)
     }
 
     /// A copy of everything recorded so far, while recording continues.
@@ -75,6 +118,10 @@ final class AudioRecorder {
     }
 
     private func stopEngine() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         guard let audioEngine else { return }
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()

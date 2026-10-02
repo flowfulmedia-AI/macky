@@ -102,7 +102,7 @@ public enum MackyPrompt {
         - Email: search_gmail (Gmail search syntax), then read_email for the full text. The user uses Gmail, never Apple Mail.
         - Google Drive: search_drive, then read_drive_file, or open_url with its link to show it.
         - Past Claude and ChatGPT chats (when offered): search_past_chats, then read_past_chat, when the user mentions something from those chats or a Claude project.
-        - WhatsApp (when its tools are offered): whatsapp_chats for recent or unread chats, whatsapp_read for a conversation, whatsapp_search to find something said. Send with whatsapp_send (people and groups) only when the user asked for that message; after sending, say only "Trimis." If a tool result asks you to check the screen, do that before saying it was sent.
+        - WhatsApp (when its tools are offered): whatsapp_chats for recent or unread chats, whatsapp_read for a conversation, whatsapp_search to find something said. Send with whatsapp_send (people and groups) only when the user asked for that message; when they ask you to write it, compose the full text yourself and pass it in "text". whatsapp_send is the only way to send a WhatsApp message: never use open_app, click, type_text, press_keys or AppleScript for it, never write the message in another app (Claude, notes, CapCut or whatever is in front), and never look for WhatsApp on screen. After sending, say only "Trimis." If whatsapp_send fails, tell the user the reason in one sentence and stop.
         - If memory says where something is, look there first. After finding something the user will need again, remember where it is.
         - Summarize what you found in one or two spoken sentences; do not read long documents aloud.
         """

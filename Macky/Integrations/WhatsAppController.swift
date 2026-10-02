@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import MackyCore
 import SQLite3
@@ -6,7 +7,7 @@ import SQLite3
 /// WhatsApp through the official Mac app (from the App Store or whatsapp.com).
 /// Reading: the app's own database, opened read-only (a copy is used when WhatsApp holds a lock).
 /// Sending: opens the chat with the message typed, presses Enter, then checks the database that it was sent.
-/// Groups have no such link: they are found with WhatsApp's search and the model checks the screen before sending.
+/// Groups have no such link: they are opened through WhatsApp's search, checked step by step, and confirmed the same way.
 /// macOS asks once for access to the data of other apps (or grant Full Disk Access to Macky).
 @MainActor
 final class WhatsAppController: ObservableObject {
@@ -113,14 +114,8 @@ final class WhatsAppController: ObservableObject {
 
     // MARK: Sending
 
-    /// Returns a short result for the model; throws when it cannot be sent or confirmed.
-    struct SendResult {
-        var detail: String
-        /// Groups are opened through WhatsApp's search, so the model looks at the screen and presses Enter itself.
-        var needsScreenCheck: Bool
-    }
-
-    func send(to recipient: String, text: String) async throws -> SendResult {
+    /// Sends and confirms in WhatsApp's database; throws with a clear reason when it cannot be sent or confirmed.
+    func send(to recipient: String, text: String) async throws -> String {
         let phoneNumber: String
         let displayName: String
         if let number = WhatsAppKit.normalizedPhoneNumber(recipient, defaultCountryCode: settings.whatsAppCountryCode) {
@@ -131,32 +126,23 @@ final class WhatsAppController: ObservableObject {
                 throw WhatsAppError.unreadable("nu găsesc o conversație cu „\(recipient)”. Spune numele exact din WhatsApp sau numărul de telefon.")
             }
             guard let number = WhatsAppKit.phoneNumber(fromJID: chat.jid) else {
-                return try await typeInGroup(named: chat.name, text: text)
+                return try await sendToGroup(chat, text: text)
             }
             phoneNumber = number
             displayName = chat.name
         }
+        let sentAfter = Date().addingTimeInterval(-5)
         guard let url = WhatsAppKit.sendURL(phoneNumber: phoneNumber, text: text), NSWorkspace.shared.open(url) else {
             throw WhatsAppError.appNotInstalled
         }
         try await waitForWhatsAppInFront()
         executor.press(KeyCombination(keyCode: 36, modifiers: [], displayName: "Enter"))
-
-        // Confirm it in the database: the newest message from me in that chat should be this text.
-        let sentAfter = Date().addingTimeInterval(-20)
-        for _ in 0..<8 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if let recent = try? messages(inChatNamed: displayName, limit: 5)?.messages,
-               recent.contains(where: { $0.isFromMe && $0.date >= sentAfter && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == text.trimmingCharacters(in: .whitespacesAndNewlines) }) {
-                return SendResult(detail: "Sent to \(displayName) and confirmed in WhatsApp.", needsScreenCheck: false)
-            }
-        }
-        return SendResult(detail: "The message was typed in WhatsApp for \(displayName) and Enter was pressed, but I could not confirm it in the database yet.", needsScreenCheck: false)
+        return try await confirmSent(text, toChatNamed: displayName, since: sentAfter)
     }
 
-    /// WhatsApp has no link that opens a group, so: bring the app forward, search the group by its exact name,
-    /// open the first result and type the message without sending it.
-    private func typeInGroup(named groupName: String, text: String) async throws -> SendResult {
+    /// WhatsApp has no link that opens a group, so Macky uses WhatsApp's own search, checking at each step
+    /// (through Accessibility) that the right field has the focus. If anything looks off it stops before typing.
+    private func sendToGroup(_ chat: WhatsAppKit.Chat, text: String) async throws -> String {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp")
                 ?? ScreenActionExecutor.findApplication(named: "WhatsApp") else {
             throw WhatsAppError.appNotInstalled
@@ -165,28 +151,82 @@ final class WhatsAppController: ObservableObject {
         configuration.activates = true
         _ = try? await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
         try await waitForWhatsAppInFront()
+        guard let processIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            throw WhatsAppError.unreadable("aplicația WhatsApp nu s-a deschis.")
+        }
+        let sentAfter = Date().addingTimeInterval(-5)
 
-        let command = ModifierKeys.command
+        // 1. The chat search field.
         executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        executor.press(KeyCombination(keyCode: 3, modifiers: command, displayName: "⌘F"))
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        executor.press(KeyCombination(keyCode: 0, modifiers: command, displayName: "⌘A"))
-        await executor.type(groupName, pressEnterAfterwards: false)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        executor.press(KeyCombination(keyCode: 3, modifiers: .command, displayName: "⌘F"))
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        guard let searchField = Self.focusedTextElement(ofProcess: processIdentifier) else {
+            throw WhatsAppError.unreadable("nu am putut deschide căutarea din WhatsApp, așa că nu am scris nimic. Deschide grupul „\(chat.name)” și cere-mi din nou.")
+        }
+        executor.press(KeyCombination(keyCode: 0, modifiers: .command, displayName: "⌘A"))
+        await executor.type(chat.name, pressEnterAfterwards: false)
         try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // 2. Open the first result: the message box must now have the focus, not the search field.
         executor.press(KeyCombination(keyCode: 125, modifiers: [], displayName: "↓"))
         try? await Task.sleep(nanoseconds: 300_000_000)
         executor.press(KeyCombination(keyCode: 36, modifiers: [], displayName: "Enter"))
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        await executor.type(text, pressEnterAfterwards: false)
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        return SendResult(
-            detail: "NOT SENT YET. \(groupName) is a group, so I searched it in WhatsApp and typed the message without sending. "
-                + "Look at the new screenshot: if the open chat's header is \"\(groupName)\" and the message is in the text box, press Enter (press_keys) to send it. "
-                + "Otherwise fix it on screen (clear the wrong text, click WhatsApp's search, type the group name, click the group, click the message box, type the message, press Enter) "
-                + "and never send to another chat. After sending, say only \"Trimis.\"",
-            needsScreenCheck: true
-        )
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        guard let messageBox = Self.focusedTextElement(ofProcess: processIdentifier), !CFEqual(messageBox, searchField) else {
+            executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
+            throw WhatsAppError.unreadable("nu am reușit să deschid grupul „\(chat.name)” din căutare, așa că nu am trimis nimic.")
+        }
+
+        // 3. Type, send, and confirm in the database that it landed in this group.
+        await executor.type(text, pressEnterAfterwards: true)
+        return try await confirmSent(text, toChatNamed: chat.name, since: sentAfter)
+    }
+
+    /// Looks in WhatsApp's database for the message; if it went to another chat, says which.
+    private func confirmSent(_ text: String, toChatNamed chatName: String, since sentAfter: Date) async throws -> String {
+        let wanted = Self.comparable(text)
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if let recent = try? messages(inChatNamed: chatName, limit: 8)?.messages,
+               recent.contains(where: { $0.isFromMe && $0.date >= sentAfter && Self.comparable($0.text) == wanted }) {
+                return "Sent to \(chatName) and confirmed in WhatsApp."
+            }
+        }
+        if let elsewhere = try? recentOutgoingChat(matching: wanted, since: sentAfter), elsewhere != chatName {
+            throw WhatsAppError.unreadable("mesajul a ajuns în „\(elsewhere)”, nu în „\(chatName)”. Verifică WhatsApp.")
+        }
+        throw WhatsAppError.unreadable("nu văd mesajul trimis în „\(chatName)”. Verifică WhatsApp: poate a rămas scris, netrimis.")
+    }
+
+    private func recentOutgoingChat(matching wanted: String, since date: Date) throws -> String? {
+        try withDatabase { database in
+            let sql = """
+            SELECT s.ZPARTNERNAME, m.ZTEXT FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+            WHERE m.ZISFROMME = 1 AND m.ZMESSAGEDATE >= \(date.timeIntervalSinceReferenceDate)
+            ORDER BY m.ZMESSAGEDATE DESC LIMIT 20
+            """
+            return try Self.rows(database, sql) { statement in (Self.text(statement, 0), Self.text(statement, 1)) }
+                .first { Self.comparable($0.1 ?? "") == wanted }?.0
+        }
+    }
+
+    private static func comparable(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The focused element of the app, when it is a text field or text area.
+    private static func focusedTextElement(ofProcess processIdentifier: pid_t) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+        let element = focused as! AXUIElement
+        var role: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        let roleName = role as? String ?? ""
+        let textRoles: Set<String> = [kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String, "AXSearchField"]
+        return textRoles.contains(roleName) ? element : nil
     }
 
     private func waitForWhatsAppInFront() async throws {

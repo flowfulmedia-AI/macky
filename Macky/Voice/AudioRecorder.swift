@@ -1,4 +1,3 @@
-import AudioToolbox
 import AVFoundation
 
 struct RecordedAudio {
@@ -55,27 +54,36 @@ final class AudioRecorder {
     /// The microphone preference from settings (see AudioInputDevices).
     var microphonePreference = AudioInputDevices.automaticPreference
     private(set) var currentMicrophoneName: String?
-    private var configurationObserver: NSObjectProtocol?
+    /// The system microphone before Macky switched it for this recording; put back when recording stops.
+    private var inputDeviceToRestore: AudioDeviceID?
 
     func startRecording() throws {
         stopEngine()
         recordedSamplesLock.lock()
         recordedSamples.removeAll(keepingCapacity: true)
         recordedSamplesLock.unlock()
-        try startEngine()
+
+        // AVAudioEngine records from macOS's current microphone. To use another one (the Mac's own instead of
+        // Bluetooth headphones), switch the system microphone just for this recording.
+        let previousDevice = AudioInputDevices.systemDefault()
+        if let chosenDevice = AudioInputDevices.resolve(preference: microphonePreference),
+           chosenDevice.id != previousDevice?.id, let previousDevice,
+           AudioInputDevices.setSystemDefault(chosenDevice.id) {
+            inputDeviceToRestore = previousDevice.id
+        }
+        currentMicrophoneName = AudioInputDevices.systemDefault()?.name
+
+        do {
+            try startEngine()
+        } catch {
+            restoreInputDevice()
+            throw error
+        }
     }
 
-    /// Starts (or restarts, after the device changed) the engine without clearing what was recorded.
     private func startEngine() throws {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let chosenDevice = AudioInputDevices.resolve(preference: microphonePreference)
-        if let chosenDevice, let audioUnit = inputNode.audioUnit {
-            var deviceID = chosenDevice.id
-            AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                 &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
-        }
-        currentMicrophoneName = chosenDevice?.name ?? AudioInputDevices.systemDefault()?.name
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noInputDevice
@@ -91,14 +99,12 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         audioEngine = engine
+    }
 
-        // Headphones connecting, or switching to their headset mode, change the format mid-recording:
-        // without a restart the engine stops delivering sound.
-        configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            guard let self, self.audioEngine === engine else { return }
-            self.stopEngine()
-            try? self.startEngine()
-        }
+    private func restoreInputDevice() {
+        guard let inputDeviceToRestore else { return }
+        self.inputDeviceToRestore = nil
+        _ = AudioInputDevices.setSystemDefault(inputDeviceToRestore)
     }
 
     func stopRecording() -> RecordedAudio {
@@ -118,14 +124,12 @@ final class AudioRecorder {
     }
 
     private func stopEngine() {
-        if let configurationObserver {
-            NotificationCenter.default.removeObserver(configurationObserver)
-            self.configurationObserver = nil
+        if let audioEngine {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioEngine.stop()
+            self.audioEngine = nil
         }
-        guard let audioEngine else { return }
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-        self.audioEngine = nil
+        restoreInputDevice()
     }
 
     /// Runs on the audio thread.

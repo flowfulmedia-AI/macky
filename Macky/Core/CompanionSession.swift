@@ -784,6 +784,10 @@ final class CompanionSession: ObservableObject {
         overlayController.hideImmediately()
     }
 
+    private struct TranscriptionTimeout: LocalizedError {
+        var errorDescription: String? { "a durat prea mult. Încearcă din nou." }
+    }
+
     static func silenceMessage(for recordedAudio: RecordedAudio) -> String {
         if recordedAudio.peakLevel < 0.003 {
             let microphone = recordedAudio.microphoneName.map { "„\($0)”" } ?? "Microfonul"
@@ -799,6 +803,13 @@ final class CompanionSession: ObservableObject {
             fail(with: "Transcrierea nu e pregătită.")
             return nil
         }
+        // A microphone that delivered only silence: say so at once instead of letting Whisper invent words.
+        if recordedAudio.peakLevel < 0.003 {
+            earlyTranscription?.task.cancel()
+            earlyTranscription = nil
+            if reportsSilence { fail(with: Self.silenceMessage(for: recordedAudio)) }
+            return nil
+        }
         do {
             let transcript: String
             if let earlyTranscription, speechEndpointDetector.isSilentAfter(sampleIndex: earlyTranscription.sampleCount),
@@ -807,7 +818,20 @@ final class CompanionSession: ObservableObject {
                 transcript = earlyTranscript
             } else {
                 earlyTranscription?.task.cancel()
-                transcript = try await transcriber.transcribe(samples: recordedAudio.samples, languageCode: settings.responseLanguage.transcriptionLanguageCode)
+                let samples = recordedAudio.samples
+                let languageCode = settings.responseLanguage.transcriptionLanguageCode
+                let timeoutSeconds = UInt64(max(30, recordedAudio.durationInSeconds * 3))
+                // Never leave "Transcriu…" on screen forever.
+                transcript = try await withThrowingTaskGroup(of: String.self) { group in
+                    group.addTask { try await transcriber.transcribe(samples: samples, languageCode: languageCode) }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+                        throw TranscriptionTimeout()
+                    }
+                    let first = try await group.next() ?? ""
+                    group.cancelAll()
+                    return first
+                }
             }
             earlyTranscription = nil
             guard isCurrent(interactionIdentifier) else { return nil }

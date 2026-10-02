@@ -44,6 +44,17 @@ enum AudioInputDevices {
         return all().first { $0.id == deviceID }
     }
 
+    /// Makes `deviceID` the system microphone. Returns false if macOS refused.
+    @discardableResult
+    static func setSystemDefault(_ deviceID: AudioDeviceID) -> Bool {
+        var deviceID = deviceID
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID) == noErr
+    }
+
     /// The microphone to record from, or nil to leave macOS's choice.
     static func resolve(preference: String) -> AudioInputDevice? {
         let devices = all()

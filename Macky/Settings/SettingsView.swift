@@ -1010,7 +1010,7 @@ private struct WhatsAppPage: View {
                     ])
                 }
             }
-            SettingsGroup(title: "Trimitere", footer: "Macky deschide conversația cu mesajul scris, apasă Enter și verifică în WhatsApp că a plecat. În modul „Întreabă înainte”, îți arată mesajul înainte să-l trimită; în rutine trimite direct. În grupuri, caută grupul în WhatsApp, scrie mesajul și se uită pe ecran că e grupul corect înainte să apese Enter (ecranul trebuie să fie deblocat).") {
+            SettingsGroup(title: "Trimitere", footer: "Macky deschide conversația cu mesajul scris, apasă Enter și verifică în WhatsApp că a plecat. În modul „Întreabă înainte”, îți arată mesajul înainte să-l trimită; în rutine trimite direct. În grupuri, deschide grupul din căutarea WhatsApp, verifică pas cu pas că e în locul potrivit și confirmă la final că mesajul a ajuns în grup (ecranul trebuie să fie deblocat).") {
                 SettingsRow(title: "Prefix de țară implicit", subtitle: "Pentru numerele spuse fără prefix, de ex. „0722…”.") {
                     TextField("40", text: $settings.whatsAppCountryCode).mackyField().frame(width: 70)
                 }

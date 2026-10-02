@@ -30,7 +30,7 @@ final class WhatsAppController: ObservableObject {
             case .appNotInstalled:
                 return "Nu găsesc aplicația WhatsApp pentru Mac (din App Store). Instaleaz-o și conectează-te în ea."
             case .noAccess:
-                return "Macky nu are voie să citească WhatsApp. Permite accesul la datele altor aplicații sau dă-i lui Macky Full Disk Access (System Settings → Privacy & Security)."
+                return "Macky nu are încă voie să citească WhatsApp. Deschide System Settings → Privacy & Security → Full Disk Access, pornește Macky (sau adaugă-l cu +), apoi repornește Macky."
             case .unreadable(let reason):
                 return "Nu pot citi WhatsApp: \(reason)"
             case .notSent(let reason):

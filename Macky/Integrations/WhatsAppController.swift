@@ -159,26 +159,40 @@ final class WhatsAppController: ObservableObject {
         }
         let sentAfter = Date().addingTimeInterval(-5)
 
-        // 1. The chat search field.
-        executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        executor.press(KeyCombination(keyCode: 3, modifiers: .command, displayName: "⌘F"))
-        try? await Task.sleep(nanoseconds: 600_000_000)
-        guard let searchField = Self.focusedTextElement(ofProcess: processIdentifier) else {
-            throw WhatsAppError.notSent("nu am putut deschide căutarea din WhatsApp, așa că nu am scris nimic. Deschide grupul „\(chat.name)” și cere-mi din nou.")
+        // 1. Open the group: straight from the chat list if it is visible, otherwise through the search field.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard let firstLook = WhatsAppUI.snapshot(processIdentifier: processIdentifier), !firstLook.nodes.isEmpty else {
+            throw WhatsAppError.notSent("nu pot citi fereastra WhatsApp (Accessibility), așa că nu am trimis nimic.")
         }
-        executor.press(KeyCombination(keyCode: 0, modifiers: .command, displayName: "⌘A"))
-        await executor.type(chat.name, pressEnterAfterwards: false)
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if !WhatsAppUI.conversationIsOpen(named: chat.name, in: firstLook) {
+            if let row = WhatsAppUI.chatRow(named: chat.name, in: firstLook) {
+                WhatsAppUI.click(row)
+            } else if let searchField = WhatsAppUI.searchField(in: firstLook) {
+                WhatsAppUI.click(searchField)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                executor.press(KeyCombination(keyCode: 0, modifiers: .command, displayName: "⌘A"))
+                await executor.type(chat.name, pressEnterAfterwards: false)
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                guard let results = WhatsAppUI.snapshot(processIdentifier: processIdentifier),
+                      let row = WhatsAppUI.chatRow(named: chat.name, in: results, below: searchField.frame.maxY) else {
+                    executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
+                    throw notOpened(chat.name, firstLook)
+                }
+                WhatsAppUI.click(row)
+            } else {
+                throw notOpened(chat.name, firstLook)
+            }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+        }
 
-        // 2. Open the first result: the message box must now have the focus, not the search field.
-        executor.press(KeyCombination(keyCode: 125, modifiers: [], displayName: "↓"))
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        executor.press(KeyCombination(keyCode: 36, modifiers: [], displayName: "Enter"))
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        guard let messageBox = Self.focusedTextElement(ofProcess: processIdentifier), !CFEqual(messageBox, searchField) else {
-            executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
-            throw WhatsAppError.notSent("nu am reușit să deschid grupul „\(chat.name)” din căutare, așa că nu am trimis nimic.")
+        // 2. Check the conversation header shows the group, then put the cursor in its message box.
+        guard let opened = WhatsAppUI.snapshot(processIdentifier: processIdentifier),
+              WhatsAppUI.conversationIsOpen(named: chat.name, in: opened) else {
+            throw notOpened(chat.name, WhatsAppUI.snapshot(processIdentifier: processIdentifier) ?? firstLook)
+        }
+        if let messageBox = WhatsAppUI.messageBox(in: opened) {
+            WhatsAppUI.click(messageBox)
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
 
         // 3. Type, send, and confirm in the database that it landed in this group.
@@ -218,18 +232,12 @@ final class WhatsAppController: ObservableObject {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    /// The focused element of the app, when it is a text field or text area.
-    private static func focusedTextElement(ofProcess processIdentifier: pid_t) -> AXUIElement? {
-        let application = AXUIElementCreateApplication(processIdentifier)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-        let element = focused as! AXUIElement
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        let roleName = role as? String ?? ""
-        let textRoles: Set<String> = [kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String, "AXSearchField"]
-        return textRoles.contains(roleName) ? element : nil
+    /// Nothing was sent; what the window showed is saved so the steps can be adjusted to this WhatsApp version.
+    private func notOpened(_ chatName: String, _ snapshot: WhatsAppUI.Snapshot) -> WhatsAppError {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Macky", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? WhatsAppUI.describe(snapshot).write(to: folder.appendingPathComponent("whatsapp-ui.txt"), atomically: true, encoding: .utf8)
+        return .notSent("nu am reușit să deschid grupul „\(chatName)”, așa că nu am trimis nimic. (Detalii în ~/Library/Logs/Macky/whatsapp-ui.txt)")
     }
 
     private func waitForWhatsAppInFront() async throws {

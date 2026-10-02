@@ -86,6 +86,7 @@ final class CompanionSession: ObservableObject {
     private var pointingClickMonitor: Any?
 
     private static let minimumRecordingDurationInSeconds = 0.3
+    private var listeningStartDate: Date?
     private static let maximumPointingSteps = 5
     /// Upper bound on model round trips for one question when Macky acts on the computer.
     private static let maximumAgentSteps = 8
@@ -261,6 +262,7 @@ final class CompanionSession: ObservableObject {
         do {
             audioRecorder.microphonePreference = settings.microphonePreference
             try audioRecorder.startRecording()
+            listeningStartDate = Date()
         } catch {
             _ = startNewInteraction()
             fail(with: "Nu pot porni microfonul: \(error.localizedDescription)")
@@ -292,8 +294,14 @@ final class CompanionSession: ObservableObject {
         let userDrawingStrokes = drawingOverlayController.meaningfulStrokes
 
         guard recordedAudio.durationInSeconds >= Self.minimumRecordingDurationInSeconds else {
-            state = .idle
             drawingOverlayController.clear()
+            // Keys held for a while but no sound arrived: the microphone is the problem, say which.
+            if let listeningStartDate, Date().timeIntervalSince(listeningStartDate) > 1 {
+                let microphone = recordedAudio.microphoneName.map { "„\($0)”" } ?? "Microfonul"
+                fail(with: "\(microphone) nu a trimis sunet. Alege alt microfon în Setări → Voce și limbă → Microfon.")
+                return
+            }
+            state = .idle
             overlayController.hideImmediately()
             return
         }
@@ -536,6 +544,7 @@ final class CompanionSession: ObservableObject {
         do {
             audioRecorder.microphonePreference = settings.microphonePreference
             try audioRecorder.startRecording()
+            listeningStartDate = Date()
         } catch {
             return false
         }

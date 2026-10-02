@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 
 struct RecordedAudio {
     /// 16 kHz mono Float32 samples, the format Whisper expects.
@@ -36,79 +37,62 @@ enum AudioRecorderError: LocalizedError {
     }
 }
 
-/// Records the microphone while the talk hotkey is held, converting on the fly to 16 kHz mono.
-final class AudioRecorder {
+/// Records the microphone while the talk hotkey is held, as 16 kHz mono.
+/// Uses a capture session on one chosen microphone: unlike AVAudioEngine it does not depend on (or change)
+/// the Mac's sound settings, so Bluetooth headphones can keep playing while the Mac's own microphone listens.
+final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     static let transcriptionSampleRate: Double = 16_000
 
     /// Called on the main thread with a 0...1 loudness value, used for the waveform.
     var onAudioLevel: ((Float) -> Void)?
     /// Called on the main thread for every converted chunk: its raw loudness (RMS) and its length in samples.
     var onAudioChunk: ((Float, Int) -> Void)?
-
-    private var audioEngine: AVAudioEngine?
-    private let recordedSamplesLock = NSLock()
-    private var recordedSamples: [Float] = []
-
-    var isRecording: Bool { audioEngine != nil }
-
     /// The microphone preference from settings (see AudioInputDevices).
     var microphonePreference = AudioInputDevices.automaticPreference
     private(set) var currentMicrophoneName: String?
-    /// The system microphone before Macky switched it for this recording; put back when recording stops.
-    private var inputDeviceToRestore: AudioDeviceID?
+
+    private let captureQueue = DispatchQueue(label: "macky.audio.capture")
+    private var captureSession: AVCaptureSession?
+    private let recordedSamplesLock = NSLock()
+    private var recordedSamples: [Float] = []
+    private var converter: AVAudioConverter?
+    private let transcriptionFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+
+    var isRecording: Bool { captureSession != nil }
 
     func startRecording() throws {
-        stopEngine()
+        stopSession()
         recordedSamplesLock.lock()
         recordedSamples.removeAll(keepingCapacity: true)
         recordedSamplesLock.unlock()
 
-        // AVAudioEngine records from macOS's current microphone. To use another one (the Mac's own instead of
-        // Bluetooth headphones), switch the system microphone just for this recording.
-        let previousDevice = AudioInputDevices.systemDefault()
-        if let chosenDevice = AudioInputDevices.resolve(preference: microphonePreference),
-           chosenDevice.id != previousDevice?.id, let previousDevice,
-           AudioInputDevices.setSystemDefault(chosenDevice.id) {
-            inputDeviceToRestore = previousDevice.id
-        }
-        currentMicrophoneName = AudioInputDevices.systemDefault()?.name
-
-        do {
-            try startEngine()
-        } catch {
-            restoreInputDevice()
-            throw error
-        }
-    }
-
-    private func startEngine() throws {
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            throw AudioRecorderError.noInputDevice
-        }
-        guard let transcriptionFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.transcriptionSampleRate, channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: inputFormat, to: transcriptionFormat) else {
-            throw AudioRecorderError.unsupportedFormat
-        }
-
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
-            self?.convertAndStore(buffer, converter: converter, transcriptionFormat: transcriptionFormat)
-        }
-        engine.prepare()
-        try engine.start()
-        audioEngine = engine
-    }
-
-    private func restoreInputDevice() {
-        guard let inputDeviceToRestore else { return }
-        self.inputDeviceToRestore = nil
-        _ = AudioInputDevices.setSystemDefault(inputDeviceToRestore)
+        guard let device = Self.captureDevice(for: microphonePreference) else { throw AudioRecorderError.noInputDevice }
+        currentMicrophoneName = device.localizedName
+        let session = AVCaptureSession()
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else { throw AudioRecorderError.noInputDevice }
+        session.addInput(input)
+        let output = AVCaptureAudioDataOutput()
+        // Ask for Whisper's format directly; anything else is converted below.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: Self.transcriptionSampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false,
+            AVLinearPCMIsBigEndianKey: false
+        ]
+        output.setSampleBufferDelegate(self, queue: captureQueue)
+        guard session.canAddOutput(output) else { throw AudioRecorderError.unsupportedFormat }
+        session.addOutput(output)
+        captureSession = session
+        converter = nil
+        captureQueue.async { session.startRunning() }
     }
 
     func stopRecording() -> RecordedAudio {
-        stopEngine()
+        stopSession()
         recordedSamplesLock.lock()
         let samples = recordedSamples
         recordedSamples.removeAll()
@@ -123,23 +107,56 @@ final class AudioRecorder {
         return recordedSamples
     }
 
-    private func stopEngine() {
-        if let audioEngine {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
-            self.audioEngine = nil
-        }
-        restoreInputDevice()
+    private func stopSession() {
+        guard let captureSession else { return }
+        self.captureSession = nil
+        // Runs after every sample already queued, so nothing said before releasing the keys is lost.
+        captureQueue.sync { captureSession.stopRunning() }
     }
 
-    /// Runs on the audio thread.
-    private func convertAndStore(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter, transcriptionFormat: AVAudioFormat) {
+    /// The chosen microphone (see AudioInputDevices), or the Mac's default one.
+    private static func captureDevice(for preference: String) -> AVCaptureDevice? {
+        let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified).devices
+        if let wanted = AudioInputDevices.resolve(preference: preference),
+           let device = devices.first(where: { $0.uniqueID == wanted.uid }) {
+            return device
+        }
+        return AVCaptureDevice.default(for: .audio) ?? devices.first
+    }
+
+    // MARK: Capture (on captureQueue)
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else { return }
+        var streamDescription = streamDescriptionPointer.pointee
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frameCount > 0, let inputFormat = AVAudioFormat(streamDescription: &streamDescription),
+              let inputBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
+        inputBuffer.frameLength = AVAudioFrameCount(frameCount)
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0, frameCount: Int32(frameCount),
+                                                           into: inputBuffer.mutableAudioBufferList) == noErr else { return }
+
+        var samples: [Float]
+        if inputFormat.commonFormat == .pcmFormatFloat32, inputFormat.sampleRate == Self.transcriptionSampleRate,
+           inputFormat.channelCount == 1, let channelData = inputBuffer.floatChannelData {
+            samples = Array(UnsafeBufferPointer(start: channelData[0], count: Int(inputBuffer.frameLength)))
+        } else {
+            samples = convert(inputBuffer)
+        }
+        // A misbehaving device can deliver NaN, which makes Whisper loop for minutes.
+        for index in samples.indices where !samples[index].isFinite { samples[index] = 0 }
+        store(samples)
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        if converter == nil || converter?.inputFormat != buffer.format {
+            converter = AVAudioConverter(from: buffer.format, to: transcriptionFormat)
+        }
+        guard let converter else { return [] }
         let ratio = transcriptionFormat.sampleRate / buffer.format.sampleRate
         let outputCapacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 32
-        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: transcriptionFormat, frameCapacity: outputCapacity) else { return }
-
-        // The converter pulls input through this block; we hand it exactly one buffer per call.
-        // Reusing the same converter across calls keeps the resampler's state continuous.
+        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: transcriptionFormat, frameCapacity: outputCapacity) else { return [] }
         var hasProvidedInputBuffer = false
         var conversionError: NSError?
         converter.convert(to: convertedBuffer, error: &conversionError) { _, inputStatus in
@@ -151,16 +168,19 @@ final class AudioRecorder {
             inputStatus.pointee = .haveData
             return buffer
         }
-        guard conversionError == nil, let channelData = convertedBuffer.floatChannelData else { return }
+        guard conversionError == nil, let channelData = convertedBuffer.floatChannelData else { return [] }
+        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(convertedBuffer.frameLength)))
+    }
 
-        let frameCount = Int(convertedBuffer.frameLength)
-        let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+    private func store(_ samples: [Float]) {
+        guard !samples.isEmpty else { return }
         recordedSamplesLock.lock()
         recordedSamples.append(contentsOf: samples)
         recordedSamplesLock.unlock()
 
-        let audioLevel = Self.normalizedLevel(of: samples)
-        let rootMeanSquare = samples.isEmpty ? 0 : (samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+        let meanSquare = samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count)
+        let rootMeanSquare = meanSquare.squareRoot()
+        let audioLevel = Self.normalizedLevel(meanSquare: meanSquare)
         let chunkSampleCount = samples.count
         DispatchQueue.main.async { [weak self] in
             self?.onAudioLevel?(audioLevel)
@@ -169,9 +189,7 @@ final class AudioRecorder {
     }
 
     /// Maps RMS loudness from -50 dB (silence) ... 0 dB (very loud) onto 0...1.
-    private static func normalizedLevel(of samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        let meanSquare = samples.reduce(Float(0)) { $0 + $1 * $1 } / Float(samples.count)
+    private static func normalizedLevel(meanSquare: Float) -> Float {
         let decibels = 10 * log10(max(meanSquare, 1e-10))
         return min(max((decibels + 50) / 50, 0), 1)
     }

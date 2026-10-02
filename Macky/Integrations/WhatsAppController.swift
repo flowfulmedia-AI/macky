@@ -23,6 +23,7 @@ final class WhatsAppController: ObservableObject {
         case appNotInstalled
         case noAccess
         case unreadable(String)
+        case notSent(String)
 
         var errorDescription: String? {
             switch self {
@@ -32,6 +33,8 @@ final class WhatsAppController: ObservableObject {
                 return "Macky nu are voie să citească WhatsApp. Permite accesul la datele altor aplicații sau dă-i lui Macky Full Disk Access (System Settings → Privacy & Security)."
             case .unreadable(let reason):
                 return "Nu pot citi WhatsApp: \(reason)"
+            case .notSent(let reason):
+                return "WhatsApp: \(reason)"
             }
         }
     }
@@ -162,7 +165,7 @@ final class WhatsAppController: ObservableObject {
         executor.press(KeyCombination(keyCode: 3, modifiers: .command, displayName: "⌘F"))
         try? await Task.sleep(nanoseconds: 600_000_000)
         guard let searchField = Self.focusedTextElement(ofProcess: processIdentifier) else {
-            throw WhatsAppError.unreadable("nu am putut deschide căutarea din WhatsApp, așa că nu am scris nimic. Deschide grupul „\(chat.name)” și cere-mi din nou.")
+            throw WhatsAppError.notSent("nu am putut deschide căutarea din WhatsApp, așa că nu am scris nimic. Deschide grupul „\(chat.name)” și cere-mi din nou.")
         }
         executor.press(KeyCombination(keyCode: 0, modifiers: .command, displayName: "⌘A"))
         await executor.type(chat.name, pressEnterAfterwards: false)
@@ -175,7 +178,7 @@ final class WhatsAppController: ObservableObject {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         guard let messageBox = Self.focusedTextElement(ofProcess: processIdentifier), !CFEqual(messageBox, searchField) else {
             executor.press(KeyCombination(keyCode: 53, modifiers: [], displayName: "Escape"))
-            throw WhatsAppError.unreadable("nu am reușit să deschid grupul „\(chat.name)” din căutare, așa că nu am trimis nimic.")
+            throw WhatsAppError.notSent("nu am reușit să deschid grupul „\(chat.name)” din căutare, așa că nu am trimis nimic.")
         }
 
         // 3. Type, send, and confirm in the database that it landed in this group.
@@ -194,9 +197,9 @@ final class WhatsAppController: ObservableObject {
             }
         }
         if let elsewhere = try? recentOutgoingChat(matching: wanted, since: sentAfter), elsewhere != chatName {
-            throw WhatsAppError.unreadable("mesajul a ajuns în „\(elsewhere)”, nu în „\(chatName)”. Verifică WhatsApp.")
+            throw WhatsAppError.notSent("mesajul a ajuns în „\(elsewhere)”, nu în „\(chatName)”. Verifică WhatsApp.")
         }
-        throw WhatsAppError.unreadable("nu văd mesajul trimis în „\(chatName)”. Verifică WhatsApp: poate a rămas scris, netrimis.")
+        throw WhatsAppError.notSent("nu văd mesajul trimis în „\(chatName)”. Verifică WhatsApp: poate a rămas scris, netrimis.")
     }
 
     private func recentOutgoingChat(matching wanted: String, since date: Date) throws -> String? {

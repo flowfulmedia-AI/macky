@@ -55,6 +55,7 @@ public enum ScreenAction: Equatable, Sendable {
     case whatsAppSend(to: String, text: String)
     case searchPastChats(query: String)
     case readPastChat(title: String)
+    case runAgent(name: String, request: String?)
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -184,6 +185,9 @@ public enum ScreenAction: Equatable, Sendable {
         case .readPastChat:
             guard let title = Self.nonEmptyString(arguments["title"]) else { return nil }
             self = .readPastChat(title: title)
+        case .runAgent:
+            guard let name = Self.nonEmptyString(arguments["name"]) else { return nil }
+            self = .runAgent(name: name, request: Self.nonEmptyString(arguments["request"]))
         case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
@@ -270,6 +274,8 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută în chaturile din Claude și ChatGPT: \(query)"
         case .readPastChat(let title):
             return "Citește chatul „\(title)”"
+        case .runAgent(let name, _):
+            return "Pornește agentul „\(name)”"
         case .externalTool(let serverName, let toolName, _, _):
             return "\(serverName): \(toolName.replacingOccurrences(of: "_", with: " "))"
         }
@@ -280,7 +286,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent: return true
         default: return false
         }
     }
@@ -298,7 +304,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent: return true
         default: return false
         }
     }

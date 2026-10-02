@@ -913,10 +913,12 @@ private struct GooglePage: View {
     @State private var saveError: String?
 
     var body: some View {
-        SettingsPage(title: "Gmail și Drive", subtitle: "Macky caută și citește mailuri și fișiere, și creează documente noi (de exemplu notițele meetingurilor). Nu trimite mailuri și nu modifică fișierele tale.") {
+        SettingsPage(title: "Gmail și Drive", subtitle: "Macky caută și citește mailuri și fișiere, și creează documente noi (notițele meetingurilor, documentele agenților) în folderele alese de tine. Nu trimite mailuri și nu modifică sau șterge fișierele tale.") {
             SettingsGroup(title: "Cont") {
                 SettingsRow(title: googleAccountManager.isConnected ? (googleAccountManager.connectedEmailAddress ?? "Conectat") : "Neconectat",
-                            subtitle: googleAccountManager.isConnected ? "„Ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”." : "Adaugă întâi clientul Google de mai jos.") {
+                            subtitle: googleAccountManager.isConnected
+                                ? (googleAccountManager.canWriteToDriveFolders ? "„Ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”." : "Ca agenții să poată salva în folderele tale din Drive: Deconectează, apoi Conectează din nou (permisiune nouă).")
+                                : "Adaugă întâi clientul Google de mai jos.") {
                     if googleAccountManager.isConnected {
                         Button("Deconectează") { googleAccountManager.disconnect() }.buttonStyle(MackySecondaryPillStyle())
                     } else {

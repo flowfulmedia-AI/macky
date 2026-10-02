@@ -42,6 +42,9 @@ struct HomeView: View {
     @ObservedObject var memoryManager: MemoryManager
     @ObservedObject var historyStore: HistoryStore
     @ObservedObject var routineStore: RoutineStore
+    @ObservedObject var agentStore: AgentStore
+    @ObservedObject var skillLibrary: SkillLibrary
+    @ObservedObject var googleAccountManager: GoogleAccountManager
     let suggestions: [SuggestionCatalog.Suggestion]
     let openSettings: () -> Void
     /// The smaller version shown under the notch.
@@ -50,6 +53,7 @@ struct HomeView: View {
     var homeContent: AnyView?
 
     @State private var selection: Section = .home
+    @State private var selectedAgentIdentifier: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -82,6 +86,11 @@ struct HomeView: View {
                 VStack(spacing: 2) {
                     ForEach(Section.allCases) { section in
                         sidebarRow(section)
+                        if section == .agents {
+                            ForEach(agentStore.agents) { agent in
+                                agentRow(agent)
+                            }
+                        }
                     }
                 }
             }
@@ -105,7 +114,10 @@ struct HomeView: View {
 
     private func sidebarRow(_ section: Section) -> some View {
         let isSelected = selection == section
-        return Button { selection = section } label: {
+        return Button {
+            selection = section
+            if section == .agents { selectedAgentIdentifier = nil }
+        } label: {
             HStack(spacing: compact ? 9 : 12) {
                 MackyMascotView(mood: section == .home ? mascotMood : .idle, size: compact ? 30 : 40, colors: section.palette)
                 VStack(alignment: .leading, spacing: compact ? 1 : 2) {
@@ -138,12 +150,45 @@ struct HomeView: View {
         .pointingHandOnHover()
     }
 
+    /// Each agent under "Agenți", so the team is always in sight.
+    private func agentRow(_ agent: AgentDefinition) -> some View {
+        let isSelected = selection == .agents && selectedAgentIdentifier == agent.id
+        let isRunning = agentStore.isRunning(agent.id)
+        return Button {
+            selection = .agents
+            selectedAgentIdentifier = agent.id
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(isRunning ? MascotPalette.peach[0] : (agent.isEnabled ? MackyDesign.accent : Color.white.opacity(0.25)))
+                    .frame(width: 7, height: 7)
+                Text(agent.name)
+                    .font(MackyDesign.rounded(compact ? 12 : 13, .semibold))
+                    .foregroundColor(isSelected ? MackyDesign.textPrimary : MackyDesign.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if isRunning {
+                    Image(systemName: "hourglass").font(.system(size: 10)).foregroundColor(MascotPalette.peach[0])
+                }
+            }
+            .padding(.leading, compact ? 30 : 44)
+            .padding(.trailing, 10)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(isSelected ? MackyDesign.surfaceStrong : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, compact ? 4 : 8)
+        .pointingHandOnHover()
+    }
+
     private func subtitle(for section: Section) -> String {
         switch section {
         case .home: return session.lastAnswerText.isEmpty ? session.state.displayName : session.lastAnswerText
         case .agents:
-            if agentManager.runningJobCount > 0 { return "\(agentManager.runningJobCount) lucrează acum" }
-            return agentManager.jobs.first?.goal ?? "Cercetări și sarcini lungi"
+            let working = agentManager.runningJobCount + agentStore.runningAgentIdentifiers.count
+            if working > 0 { return "\(working) lucrează acum" }
+            return agentStore.agents.isEmpty ? "Echipa ta de agenți" : "\(agentStore.agents.count) în echipă"
         case .meetings: return zoomMeetingsManager.processedMeetings.first?.topic ?? "Zoom → notițe în Drive"
         case .memory: return "\(memoryManager.items.count) amintiri · \(memoryManager.procedureBook.procedures.count) proceduri"
         case .history: return historyStore.entries.first?.question ?? "Toate cererile tale"
@@ -154,7 +199,9 @@ struct HomeView: View {
 
     private func badge(for section: Section) -> String? {
         switch section {
-        case .agents: return agentManager.runningJobCount > 0 ? "\(agentManager.runningJobCount)" : nil
+        case .agents:
+            let working = agentManager.runningJobCount + agentStore.runningAgentIdentifiers.count
+            return working > 0 ? "\(working)" : nil
         case .history: return historyStore.entries.first.map { $0.date.formatted(date: .omitted, time: .shortened) }
         case .meetings: return zoomMeetingsManager.processedMeetings.first.map { $0.date.formatted(.dateTime.day().month(.abbreviated)) }
         default: return nil
@@ -192,7 +239,8 @@ struct HomeView: View {
                 HomeSectionView(session: session, settings: settings, suggestions: suggestions, mood: mascotMood)
             }
         case .agents:
-            AgentsSectionView(agentManager: agentManager)
+            AgentsSectionView(agentStore: agentStore, agentManager: agentManager, skillLibrary: skillLibrary,
+                              googleAccountManager: googleAccountManager, selectedAgentIdentifier: $selectedAgentIdentifier, compact: compact)
         case .meetings:
             MeetingsSectionView(manager: zoomMeetingsManager, openSettings: openSettings)
         case .memory:
@@ -292,50 +340,6 @@ private struct HomeSectionView: View {
 }
 
 // MARK: - Agents
-
-private struct AgentsSectionView: View {
-    @ObservedObject var agentManager: BackgroundAgentManager
-    @State private var goal = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Agenți în fundal").font(MackyDesign.rounded(24, .bold)).foregroundColor(MackyDesign.textPrimary)
-            Text("Dă-le o sarcină lungă (cercetare, comparații, un document) și continuă-ți treaba. Rezultatul ajunge în Documents/Macky.")
-                .font(MackyDesign.rounded(13)).foregroundColor(MackyDesign.textSecondary)
-            HStack(spacing: 10) {
-                TextField("ex. Caută cele mai bune 5 CRM-uri pentru agenții mici și fă o comparație", text: $goal)
-                    .textFieldStyle(.plain)
-                    .font(MackyDesign.rounded(14))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
-                    .background(Capsule().fill(MackyDesign.surface))
-                    .overlay(Capsule().stroke(MackyDesign.hairline, lineWidth: 1))
-                    .onSubmit(start)
-                Button(action: start) { Label("Pornește", systemImage: "play.fill") }
-                    .buttonStyle(MackyPrimaryPillStyle())
-                    .disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if agentManager.jobs.isEmpty {
-                Spacer()
-                HStack { Spacer(); MackyMascotView(mood: .idle, size: 80, colors: MascotPalette.peach); Spacer() }
-                Text("Niciun agent încă. Poți spune și „Agent, …” cu vocea.")
-                    .font(MackyDesign.rounded(13)).foregroundColor(MackyDesign.textSecondary)
-                    .frame(maxWidth: .infinity)
-                Spacer()
-            } else {
-                ScrollView { BackgroundJobsView(agentManager: agentManager) }
-            }
-        }
-        .padding(28)
-    }
-
-    private func start() {
-        let trimmedGoal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedGoal.isEmpty else { return }
-        agentManager.start(goal: trimmedGoal)
-        goal = ""
-    }
-}
 
 // MARK: - Meetings
 

@@ -11,6 +11,9 @@ import Network
 final class GoogleAccountManager: ObservableObject {
     private static let keychainService = "com.flowfulmedia.macky.google"
 
+    /// The full Drive permission (saving into the user's folders) arrived with the latest sign-in.
+    @Published private(set) var canWriteToDriveFolders = GoogleOAuth.grantsDriveWrite(UserDefaults.standard.string(forKey: GoogleAccountManager.grantedScopeDefaultsKey))
+    static let grantedScopeDefaultsKey = "googleGrantedScope"
     @Published private(set) var hasClientCredentials: Bool
     @Published private(set) var isConnected: Bool
     @Published private(set) var connectedEmailAddress: String?
@@ -108,6 +111,8 @@ final class GoogleAccountManager: ObservableObject {
             refreshToken = newRefreshToken
             accessToken = tokens.accessToken
             accessTokenExpiryDate = Date().addingTimeInterval(tokens.expiresInSeconds - 60)
+            UserDefaults.standard.set(tokens.grantedScope, forKey: Self.grantedScopeDefaultsKey)
+            canWriteToDriveFolders = GoogleOAuth.grantsDriveWrite(tokens.grantedScope)
             isConnected = true
             await loadProfile()
             statusText = "Conectat" + (connectedEmailAddress.map { " ca \($0)" } ?? "") + "."
@@ -236,6 +241,26 @@ final class GoogleAccountManager: ObservableObject {
             throw GoogleOAuth.OAuthError(message: "Drive nu a confirmat documentul.")
         }
         return created.link ?? "https://docs.google.com/document/d/\(created.identifier)"
+    }
+
+    /// Saves a Google Doc into one of the user's own folders (needs the full Drive permission).
+    func uploadGoogleDoc(named name: String, html: String, intoFolder folderIdentifier: String) async throws -> String {
+        let upload = DriveUpload.multipartBody(name: name, targetMimeType: "application/vnd.google-apps.document",
+                                               parentFolderIdentifier: folderIdentifier, content: Data(html.utf8), contentMimeType: "text/html")
+        var request = URLRequest(url: DriveUpload.uploadURL)
+        request.httpMethod = "POST"
+        request.setValue(upload.contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = upload.body
+        do {
+            guard let created = DriveUpload.parseCreatedFile(try await authorizedData(for: request)) else {
+                throw GoogleOAuth.OAuthError(message: "Drive nu a confirmat documentul.")
+            }
+            return created.link ?? "https://docs.google.com/document/d/\(created.identifier)"
+        } catch let error as GoogleOAuth.OAuthError where error.message.lowercased().contains("not found") || error.message.lowercased().contains("insufficient") {
+            throw GoogleOAuth.OAuthError(message: canWriteToDriveFolders
+                ? "Nu găsesc folderul din Drive. Verifică linkul folderului în setările agentului."
+                : "Macky nu are încă voie să scrie în folderele tale din Drive. Setări → Conexiuni → Gmail și Drive → Deconectează, apoi Conectează din nou.")
+        }
     }
 
     private func folderIdentifier(named folderName: String) async throws -> String {

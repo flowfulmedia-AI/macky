@@ -48,6 +48,8 @@ final class CompanionSession: ObservableObject {
     let zoomMeetingsManager: ZoomMeetingsManager
     let whatsAppController: WhatsAppController
     let chatArchiveStore = ChatArchiveStore()
+    /// Set by the app once created; lets the user start their agents by voice.
+    var agentStore: AgentStore?
     /// The routine being run, if the current request is one.
     private var runningRoutine: Routine?
     private let localFileSearch = LocalFileSearch()
@@ -981,6 +983,7 @@ final class CompanionSession: ObservableObject {
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
                 if MackyTool.whatsAppTools.contains(tool) { return whatsAppController.isAvailable }
                 if MackyTool.pastChatTools.contains(tool) { return !chatArchiveStore.isEmpty }
+                if tool == .runAgent { return !(agentStore?.agents.isEmpty ?? true) }
                 return true
             }
         }
@@ -1379,6 +1382,16 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
         case .readDriveFile(let identifier):
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readDriveFile(identifier: identifier))
+        case .runAgent(let name, let request):
+            guard let agentStore, let agent = agentStore.agent(named: name) else {
+                let names = agentStore?.agents.map(\.name).joined(separator: ", ") ?? ""
+                return .failed("No agent is called \(name). The user's agents: \(names).")
+            }
+            if agentStore.isRunning(agent.id) {
+                return .done(action.userFacingDescription, resultDetail: "\(agent.name) is already working.")
+            }
+            agentStore.run(agent.id, extraRequest: request)
+            return .done(action.userFacingDescription, resultDetail: "\(agent.name) started in the background.")
         case .searchPastChats(let query):
             return .done(action.userFacingDescription, resultDetail: chatArchiveStore.search(query))
         case .readPastChat(let title):
@@ -1514,7 +1527,7 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat:
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent:
             break
         case .whatsAppSend(let recipient, let text):
             do {

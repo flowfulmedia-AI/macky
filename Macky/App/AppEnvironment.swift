@@ -23,6 +23,7 @@ final class AppEnvironment {
     let mcpConnectionStore = MCPConnectionStore()
     let zoomMeetingsManager: ZoomMeetingsManager
     let usageStore: UsageStore
+    let agentStore: AgentStore
     let hotkeyMonitor: GlobalHotkeyMonitor
     let windowCoordinator = WindowCoordinator()
     private(set) var menuBarController: MenuBarController!
@@ -60,6 +61,10 @@ final class AppEnvironment {
             mcpConnectionStore: mcpConnectionStore,
             zoomMeetingsManager: zoomMeetingsManager
         )
+        agentStore = AgentStore(settings: settings, apiKeyStore: apiKeyStore, openRouterClient: openRouterClient,
+                                skillLibrary: skillLibrary, googleAccountManager: googleAccountManager,
+                                webResearchService: companionSession.backgroundAgentManager.webResearchService)
+        companionSession.agentStore = agentStore
         hotkeyMonitor = GlobalHotkeyMonitor(talkCombination: settings.talkCombination, dictationCombination: settings.dictationCombination)
         menuBarController = MenuBarController { [unowned self] in self.makePanelContent() }
         notchPanelController = NotchPanelController(session: companionSession) { [unowned self] in self.makePanelContent() }
@@ -97,6 +102,7 @@ final class AppEnvironment {
             companionSession?.startScheduledRoutine(routine) ?? false
         }
         routineStore.startScheduler()
+        agentStore.startScheduler()
         Task { await mcpConnectionStore.refreshAll() }
         zoomMeetingsManager.start()
         usageStore.start()
@@ -144,6 +150,9 @@ final class AppEnvironment {
             memoryManager: memoryManager,
             historyStore: historyStore,
             routineStore: routineStore,
+            agentStore: agentStore,
+            skillLibrary: skillLibrary,
+            googleAccountManager: googleAccountManager,
             suggestions: suggestions,
             openSettings: { [unowned self] in self.openSettings() },
             compact: true,
@@ -173,6 +182,9 @@ final class AppEnvironment {
                 memoryManager: memoryManager,
                 historyStore: historyStore,
                 routineStore: routineStore,
+                agentStore: agentStore,
+                skillLibrary: skillLibrary,
+                googleAccountManager: googleAccountManager,
                 suggestions: currentSuggestions(),
                 openSettings: { [unowned self] in self.openSettings() }
             )

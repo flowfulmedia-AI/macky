@@ -8,7 +8,7 @@ final class GoogleTests: XCTestCase {
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         XCTAssertEqual(value("code_challenge_method"), "S256")
         XCTAssertEqual(value("access_type"), "offline")
-        XCTAssertEqual(value("scope"), "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file")
+        XCTAssertEqual(value("scope"), "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive")
         let body = String(data: GoogleOAuth.authorizationCodeRequestBody(code: "4/a b", clientIdentifier: "id", clientSecret: "s", redirectURI: "http://127.0.0.1:5000", codeVerifier: "v"), encoding: .utf8)!
         XCTAssertTrue(body.contains("code=4%2Fa%20b"))
         XCTAssertTrue(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5000"))
@@ -75,5 +75,11 @@ final class GoogleTests: XCTestCase {
                        .searchFiles(query: "contract", kind: "any"))
         XCTAssertEqual(ScreenAction.openFile(path: "/a").isReadOnly, false)
         XCTAssertEqual(ScreenAction.readDriveFile(identifier: "x").needsNoScreen, true)
+    }
+
+    func testDriveWriteScopeDetection() {
+        XCTAssertTrue(GoogleOAuth.grantsDriveWrite("https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive"))
+        XCTAssertFalse(GoogleOAuth.grantsDriveWrite("https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly"))
+        XCTAssertFalse(GoogleOAuth.grantsDriveWrite(nil))
     }
 }

@@ -1,14 +1,20 @@
 import Foundation
 
 /// Google sign-in (OAuth 2.0 for desktop apps, with PKCE and a loopback redirect) and the few Gmail
-/// and Drive calls Macky needs. Read-only scopes: Macky can search and read, never send or delete.
+/// and Drive calls Macky needs. Gmail is read-only; Drive can be written so agents can save documents
+/// into the user's own folders (Macky only ever creates new files there, it never edits or deletes).
 public enum GoogleOAuth {
+    public static let driveScope = "https://www.googleapis.com/auth/drive"
     public static let scopes = [
         "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
-        // Only files Macky creates itself (meeting notes); Macky cannot change the user's other files.
-        "https://www.googleapis.com/auth/drive.file"
+        driveScope
     ]
+
+    /// True when the scopes Google granted include writing to any Drive folder.
+    public static func grantsDriveWrite(_ grantedScope: String?) -> Bool {
+        guard let grantedScope else { return false }
+        return grantedScope.split(separator: " ").contains { $0 == driveScope }
+    }
     public static let authorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
     public static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
 
@@ -46,6 +52,7 @@ public enum GoogleOAuth {
         public var accessToken: String
         public var refreshToken: String?
         public var expiresInSeconds: Double
+        public var grantedScope: String?
     }
 
     public struct OAuthError: Error, Equatable, LocalizedError {
@@ -69,7 +76,8 @@ public enum GoogleOAuth {
             throw OAuthError(message: "Google nu a trimis un token de acces.")
         }
         let expiresIn = (json["expires_in"] as? NSNumber)?.doubleValue ?? 3600
-        return Tokens(accessToken: accessToken, refreshToken: json["refresh_token"] as? String, expiresInSeconds: expiresIn)
+        return Tokens(accessToken: accessToken, refreshToken: json["refresh_token"] as? String, expiresInSeconds: expiresIn,
+                      grantedScope: json["scope"] as? String)
     }
 
     public struct AuthorizationCallback: Equatable, Sendable {

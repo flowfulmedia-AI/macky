@@ -49,6 +49,8 @@ public enum MackyTool: String, CaseIterable, Sendable {
     // Chats imported from the user's Claude and ChatGPT accounts.
     case searchPastChats = "search_past_chats"
     case readPastChat = "read_past_chat"
+    // The user's own agents (Agenți).
+    case runAgent = "run_agent"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
@@ -67,7 +69,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
         .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-        .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat
+        .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent
     ]
     /// Need an imported Claude or ChatGPT export.
     public static let pastChatTools: Set<MackyTool> = [.searchPastChats, .readPastChat]
@@ -350,6 +352,14 @@ public enum OpenRouterRequestBuilder {
                 + "Use it when the user refers to something discussed or made earlier in Claude or ChatGPT."
             properties = ["query": ["type": "string", "description": "A few distinctive words, e.g. 'plan lansare curs'."]]
             required = ["query"]
+        case .runAgent:
+            description = "Starts one of the user's agents (from Macky's Agenți list) in the background, by name. "
+                + "It works alone and saves its result (often a Google Doc); you only start it."
+            properties = [
+                "name": ["type": "string", "description": "The agent's name, or a clear part of it (e.g. 'Romeo')."],
+                "request": ["type": "string", "description": "Optional extra request for this run only."]
+            ]
+            required = ["name"]
         case .readPastChat:
             description = "Reads one past Claude or ChatGPT conversation, or a Claude project with its instructions and files, by its title."
             properties = ["title": ["type": "string", "description": "The title from search_past_chats, or a project name."]]

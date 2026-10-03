@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds Macky's app icon (Macky/Resources/AppIcon.icns) from a PNG, with the tools that come with macOS.
-# Source, in order: the image given as argument, Macky/Resources/AppIcon.png, ~/Downloads/LOGO Macky.png.
+# Source, in order: the image given as argument, the newest ~/Downloads/LOGO Macky*.png if it is newer than
+# Macky/Resources/AppIcon.png, then Macky/Resources/AppIcon.png.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,10 +12,12 @@ mkdir -p "$RESOURCES"
 
 source_image="${1:-}"
 if [[ -z "$source_image" ]]; then
-  if [[ -f "$SOURCE_COPY" ]]; then
+  # The newest "LOGO Macky….png" in Downloads wins when it is newer than the icon in use.
+  newest_logo="$(ls -t "$HOME"/Downloads/LOGO\ Macky*.png 2>/dev/null | head -1 || true)"
+  if [[ -n "$newest_logo" && ( ! -f "$SOURCE_COPY" || "$newest_logo" -nt "$SOURCE_COPY" ) ]]; then
+    source_image="$newest_logo"
+  elif [[ -f "$SOURCE_COPY" ]]; then
     source_image="$SOURCE_COPY"
-  elif [[ -f "$HOME/Downloads/LOGO Macky.png" ]]; then
-    source_image="$HOME/Downloads/LOGO Macky.png"
   else
     exit 0
   fi

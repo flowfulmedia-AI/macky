@@ -33,7 +33,7 @@ final class DrawingOverlayController {
             drawingWindow.orderFrontRegardless()
         }
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 self?.recordMousePosition()
             }
         }
@@ -123,7 +123,7 @@ private final class DrawingCanvasView: NSView {
     weak var controller: DrawingOverlayController?
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let window, let strokes = MainActor.assumeIsolated({ controller?.strokesToDraw }) else { return }
+        guard let window, let strokes = MainThread.run({ controller?.strokesToDraw }) else { return }
         let windowOrigin = window.frame.origin
         let accentColor = NSColor(calibratedRed: 0.20, green: 0.84, blue: 0.70, alpha: 1)
 

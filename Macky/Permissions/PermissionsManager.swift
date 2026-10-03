@@ -111,7 +111,7 @@ final class PermissionsManager: ObservableObject {
     /// Polls cheaply so the panel updates as soon as a permission is granted in System Settings.
     private func startPolling() {
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 self?.refresh()
             }
         }

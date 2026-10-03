@@ -35,7 +35,7 @@ final class AgentStore: ObservableObject {
     func startScheduler() {
         timer?.invalidate()
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.runDueAgents() }
+            MainThread.run { self?.runDueAgents() }
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)

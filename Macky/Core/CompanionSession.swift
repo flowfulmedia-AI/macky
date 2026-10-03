@@ -984,7 +984,7 @@ final class CompanionSession: ObservableObject {
         if useToolCalling {
             tools += MackyTool.informationTools.filter { tool in
                 if tool == .useSkill { return !skills.isEmpty }
-                if tool == .searchGmail || tool == .readEmail || tool == .saveEmailAttachments {
+                if tool == .searchGmail || tool == .readEmail || tool == .saveEmailAttachments || tool == .collectInvoices {
                     return googleAccountManager.isConnected || !googleAccountManager.additionalGmailAddresses.isEmpty || mailAccountsStore.hasAccounts
                 }
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
@@ -1356,6 +1356,7 @@ final class CompanionSession: ObservableObject {
 
     private func perform(_ action: ScreenAction, on screens: [CapturedScreen], coordinateConvention: CoordinateConvention,
                          stepNumber: Int, interactionIdentifier: UUID) async -> ActionOutcome {
+        ActivityLog.note("Instrument: \(action.userFacingDescription)")
         switch action {
         case .remember(let kind, let subject, let content):
             return .done(action.userFacingDescription, resultDetail: await memoryManager.remember(kind: kind, subject: subject, content: content))
@@ -1393,6 +1394,11 @@ final class CompanionSession: ObservableObject {
         case .saveEmailAttachments(let identifiers, let folder, let savesEmailWithoutAttachment):
             let report = await emailAttachmentSaver.save(identifiers: identifiers, folder: folder,
                                                          savesEmailWithoutAttachment: savesEmailWithoutAttachment) { [weak self] text in
+                self?.overlayController.setBubbleText(text)
+            }
+            return .done(action.userFacingDescription, resultDetail: report)
+        case .collectInvoices(let services, let month, let folder):
+            let report = await emailAttachmentSaver.collectInvoices(services: services, month: month, folder: folder) { [weak self] text in
                 self?.overlayController.setBubbleText(text)
             }
             return .done(action.userFacingDescription, resultDetail: report)
@@ -1491,6 +1497,7 @@ final class CompanionSession: ObservableObject {
         if case .replaceSelection = action { needsConfirmation = false }
         // Saving files into a folder of Downloads only adds files.
         if case .saveEmailAttachments = action { needsConfirmation = false }
+        if case .collectInvoices = action { needsConfirmation = false }
         if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion && needsConfirmation {
             let answer = await actionConfirmationController.requestConfirmation(
                 actionDescription: action.userFacingDescription,
@@ -1510,7 +1517,6 @@ final class CompanionSession: ObservableObject {
         }
 
         overlayController.clearPointing()
-        ActivityLog.note("Acțiune: \(action.userFacingDescription)")
         switch action {
         case .click, .typeText, .pressKeys, .clickElement, .runAppleScript:
             await MackyWindowGuard.shared.prepareForInput(clickPoint: clickTarget)
@@ -1565,7 +1571,7 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog, .saveEmailAttachments:
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog, .saveEmailAttachments, .collectInvoices:
             break
         case .whatsAppSend(let recipient, let text):
             do {
@@ -1765,7 +1771,7 @@ final class CompanionSession: ObservableObject {
         }
 
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 guard let self, self.isCurrent(interactionIdentifier) else { return }
                 var windowMoved = false
                 if let processIdentifier = frontmostApplication.processIdentifier,

@@ -15,23 +15,112 @@ final class EmailAttachmentSaver {
         self.mailAccountsStore = mailAccountsStore
     }
 
+    /// What happened to one email.
+    struct SavedEmail {
+        var identifier: String
+        var email: ParsedEmail?
+        var files: [String] = []
+        var amount: String?
+        var error: String?
+    }
+
     /// A report for the model: what was saved where, and which emails failed.
     func save(identifiers: [String], folder requestedFolder: String, savesEmailWithoutAttachment: Bool,
               progress: (String) -> Void) async -> String {
+        let folderURL: URL
+        do {
+            folderURL = try makeFolder(requestedFolder)
+        } catch {
+            return "Could not create the folder: \(error.localizedDescription)"
+        }
+        let results = await saveEmails(identifiers, into: folderURL, savesEmailWithoutAttachment: savesEmailWithoutAttachment, progress: progress)
+        let saved = results.filter { $0.error == nil && !$0.files.isEmpty }
+        let failed = results.filter { $0.error != nil }
+        var report = "Folder: \(folderURL.path)\nSaved \(saved.flatMap(\.files).count) file(s):\n"
+            + saved.map { "- " + $0.files.joined(separator: ", ") + " — from \"\($0.email?.subject ?? "")\"" }.joined(separator: "\n")
+        let skipped = results.filter { $0.error == nil && $0.files.isEmpty }
+        if !skipped.isEmpty { report += "\nSkipped (no attachment): " + skipped.compactMap { $0.email?.subject }.joined(separator: "; ") }
+        if !failed.isEmpty { report += "\nFailed:\n" + failed.map { "- \($0.identifier): \($0.error ?? "")" }.joined(separator: "\n") }
+        return report
+    }
+
+    /// The monthly invoices: one search per service in every account, everything saved, plus a summary file.
+    func collectInvoices(services: [String], month: String, folder requestedFolder: String, progress: (String) -> Void) async -> String {
+        guard let period = InvoiceKit.monthRange(month) else {
+            return "Could not understand the month \"\(month)\"; use the form 2026-09."
+        }
+        let folderURL: URL
+        do {
+            folderURL = try makeFolder(requestedFolder)
+        } catch {
+            return "Could not create the folder: \(error.localizedDescription)"
+        }
+        ActivityLog.note("Facturi: \(services.count) servicii, \(month), folder \(folderURL.path)")
+
+        var identifiersByService: [(service: String, identifiers: [String])] = []
+        var seen = Set<String>()
+        var searchProblems: [String] = []
+        for (index, service) in services.enumerated() {
+            progress("Caut facturile \(service)… \(index + 1)/\(services.count)")
+            let query = InvoiceKit.query(service: service, start: period.start, end: period.end)
+            var lines = await googleAccountManager.searchGmailLines(query: query, maximumResults: 15, accountFilter: nil)
+            lines += await mailAccountsStore.search(query: query, maximumResults: 15, accountFilter: nil)
+            searchProblems += lines.filter { $0.contains("search failed") }
+            let identifiers = InvoiceKit.identifiers(inSearchLines: lines).filter { seen.insert($0).inserted }
+            identifiersByService.append((service, identifiers))
+        }
+
+        var entries: [InvoiceKit.SummaryEntry] = []
+        var failures: [String] = []
+        let total = identifiersByService.reduce(0) { $0 + $1.identifiers.count }
+        var done = 0
+        for (service, identifiers) in identifiersByService where !identifiers.isEmpty {
+            let results = await saveEmails(identifiers, into: folderURL, savesEmailWithoutAttachment: true) { _ in
+                done += 1
+                progress("Salvez facturile… \(min(done, total))/\(total)")
+            }
+            for result in results {
+                if let error = result.error {
+                    failures.append("\(service): \(error)")
+                } else if let email = result.email {
+                    entries.append(InvoiceKit.SummaryEntry(service: service, date: email.date, subject: email.subject,
+                                                           sender: email.from, amount: result.amount, files: result.files))
+                }
+            }
+        }
+
+        let missing = services.filter { service in !entries.contains { $0.service == service } }
+        let title = folderURL.lastPathComponent
+        let summary = InvoiceKit.summary(title: title, entries: entries, servicesWithoutInvoices: missing)
+        let summaryName = write(Data(summary.utf8), named: "Rezumat facturi.txt", in: folderURL)
+        ActivityLog.note("Facturi salvate: \(entries.count), lipsă: \(missing.joined(separator: ", "))")
+
+        var report = "Folder: \(folderURL.path)\nSaved \(entries.flatMap(\.files).count) file(s) from \(entries.count) email(s); summary file: \(summaryName).\n"
+        report += entries.map { "- \($0.service): \($0.subject)\($0.amount.map { " — " + $0 } ?? "") → \($0.files.joined(separator: ", "))" }.joined(separator: "\n")
+        if !missing.isEmpty { report += "\nNo invoice found for: " + missing.joined(separator: ", ") }
+        if !failures.isEmpty { report += "\nFailed: " + failures.joined(separator: "; ") }
+        if !searchProblems.isEmpty { report += "\nSearch problems: " + searchProblems.joined(separator: "; ") }
+        return report
+    }
+
+    private func makeFolder(_ requestedFolder: String) throws -> URL {
         let folderPath = EmailFiles.folderPath(for: requestedFolder, homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
         let folderURL = URL(fileURLWithPath: folderPath, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         } catch {
             ErrorLogStore.shared.record("Atașamente email", "Nu am putut crea folderul \(folderPath): \(error.localizedDescription)")
-            return "Could not create the folder \(folderPath): \(error.localizedDescription)"
+            throw error
         }
+        return folderURL
+    }
 
-        var savedLines: [String] = []
-        var failedLines: [String] = []
-        var skippedLines: [String] = []
+    private func saveEmails(_ identifiers: [String], into folderURL: URL, savesEmailWithoutAttachment: Bool,
+                            progress: (String) -> Void) async -> [SavedEmail] {
+        var results: [SavedEmail] = []
         for (index, identifier) in identifiers.enumerated() {
             progress("Descarc atașamentele… \(index + 1)/\(identifiers.count)")
+            var result = SavedEmail(identifier: identifier)
             do {
                 let raw: Data
                 if identifier.hasPrefix("imap:") {
@@ -40,32 +129,27 @@ final class EmailAttachmentSaver {
                     raw = try await googleAccountManager.rawEmail(identifier: identifier)
                 }
                 let email = EmailFiles.parse(rawMessage: raw)
+                result.email = email
+                result.amount = InvoiceKit.amount(in: HTMLTextExtractor.readableText(fromHTML: email.html))
                 let documents = email.attachments.filter(\.isDocument)
                 if documents.isEmpty {
-                    guard savesEmailWithoutAttachment else {
-                        skippedLines.append("\(email.subject) (no attachment)")
-                        continue
+                    if savesEmailWithoutAttachment {
+                        let pdf = try await Self.pdf(fromHTML: email.html)
+                        result.files.append(write(pdf, named: EmailFiles.documentName(for: email), in: folderURL))
                     }
-                    let pdf = try await Self.pdf(fromHTML: email.html)
-                    let name = write(pdf, named: EmailFiles.documentName(for: email), in: folderURL)
-                    savedLines.append("\(name) — the email itself, as PDF (\(email.subject))")
                 } else {
                     for attachment in documents {
-                        let name = write(attachment.data, named: EmailFiles.safeFileName(attachment.fileName), in: folderURL)
-                        savedLines.append("\(name) — from \"\(email.subject)\"")
+                        result.files.append(write(attachment.data, named: EmailFiles.safeFileName(attachment.fileName), in: folderURL))
                     }
                 }
             } catch {
                 let message = CompanionSession.userFacingMessage(for: error)
-                failedLines.append("\(identifier): \(message)")
+                result.error = message
                 ErrorLogStore.shared.record("Atașamente email", "Nu am putut salva emailul \(identifier): \(message)")
             }
+            results.append(result)
         }
-
-        var report = "Folder: \(folderPath)\nSaved \(savedLines.count) file(s):\n" + savedLines.map { "- " + $0 }.joined(separator: "\n")
-        if !skippedLines.isEmpty { report += "\nSkipped (no attachment):\n" + skippedLines.map { "- " + $0 }.joined(separator: "\n") }
-        if !failedLines.isEmpty { report += "\nFailed:\n" + failedLines.map { "- " + $0 }.joined(separator: "\n") }
-        return report
+        return results
     }
 
     private func write(_ data: Data, named name: String, in folderURL: URL) -> String {

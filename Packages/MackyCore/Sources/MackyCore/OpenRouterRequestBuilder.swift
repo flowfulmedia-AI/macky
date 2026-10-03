@@ -40,6 +40,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case searchGmail = "search_gmail"
     case readEmail = "read_email"
     case saveEmailAttachments = "save_email_attachments"
+    case collectInvoices = "collect_invoices"
     case searchDrive = "search_drive"
     case readDriveFile = "read_drive_file"
     // WhatsApp through the Mac app.
@@ -70,7 +71,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
-        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .saveEmailAttachments, .searchDrive, .readDriveFile,
+        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .saveEmailAttachments, .collectInvoices, .searchDrive, .readDriveFile,
         .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog
     ]
     /// Need an imported Claude or ChatGPT export.
@@ -334,6 +335,16 @@ public enum OpenRouterRequestBuilder {
                 "save_email_if_no_attachment": ["type": "boolean", "description": "Default true: keep an email without attachments as a PDF."]
             ]
             required = ["ids", "folder"]
+        case .collectInvoices:
+            description = "Collects a month's invoices and receipts for a list of services from ALL connected email accounts in one go: "
+                + "searches each service, saves every invoice (attachments, or the email as PDF) into the folder (created if needed) "
+                + "and writes a summary file there (service, date, subject, amount, file). Use it for any 'download my invoices' request."
+            properties = [
+                "services": ["type": "array", "items": ["type": "string"], "description": "Service names as the user wrote them, e.g. 'Apple (iCloud / App Store)', 'Canva'."],
+                "month": ["type": "string", "description": "The month, e.g. '2026-09'."],
+                "folder": ["type": "string", "description": "Folder name or path, e.g. 'FACTURI - Septembrie 2026' (goes in Downloads)."]
+            ]
+            required = ["services", "month", "folder"]
         case .searchDrive:
             description = "Searches the user's Google Drive (read-only) by file name and content. Returns id, name, type, date and link."
             properties = ["query": ["type": "string", "description": "Words to find, e.g. 'contract Nordic'."]]

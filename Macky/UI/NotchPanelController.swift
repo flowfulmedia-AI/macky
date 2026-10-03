@@ -82,7 +82,7 @@ final class NotchPanelController {
         isRunning = true
         rebuildPanel()
         let timer = Timer(timeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 self?.trackMouse()
             }
         }

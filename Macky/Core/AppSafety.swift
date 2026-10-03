@@ -25,7 +25,7 @@ final class MackyWindowGuard {
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { notification in
             let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
+            MainThread.run {
                 if let application, application != .current { MackyWindowGuard.shared.lastExternalApplication = application }
             }
         }
@@ -151,5 +151,23 @@ enum ActivityLog {
         }
         termination.resume()
         signalSources.append(termination)
+    }
+}
+
+/// Runs main-actor code from AppKit callbacks that always fire on the main thread (timers on the main run loop,
+/// observers on the main queue).
+///
+/// `MainActor.assumeIsolated` is not used there on purpose: its executor check crashed Macky (EXC_BAD_ACCESS in
+/// swift_task_isMainExecutorImpl) when a timer fired inside a nested run loop, which macOS starts while an async task
+/// waits for AppleScript, Finder or a modal panel.
+enum MainThread {
+    static func run<T>(_ body: @MainActor () -> T) -> T {
+        guard Thread.isMainThread else {
+            // Never expected; hop to the main thread rather than run main-actor code elsewhere.
+            return DispatchQueue.main.sync { run(body) }
+        }
+        return withoutActuallyEscaping(body) { escapableBody in
+            unsafeBitCast(escapableBody, to: (() -> T).self)()
+        }
     }
 }

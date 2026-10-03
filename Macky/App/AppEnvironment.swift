@@ -76,7 +76,7 @@ final class AppEnvironment {
 
         hotkeyMonitor.onHotkeyEvent = { [weak companionSession] hotkeyEvent in
             // The event tap runs on the main run loop, so this is already the main thread.
-            MainActor.assumeIsolated {
+            MainThread.run {
                 companionSession?.handle(hotkeyEvent)
             }
         }
@@ -224,7 +224,7 @@ final class AppEnvironment {
     private func startHotkeyMonitorWhenPermitted() {
         if hotkeyMonitor.start() { return }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 guard let self else {
                     timer.invalidate()
                     return

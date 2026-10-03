@@ -20,7 +20,7 @@ final class RoutineStore: ObservableObject {
     func startScheduler() {
         timer?.invalidate()
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.runDueRoutines() }
+            MainThread.run { self?.runDueRoutines() }
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)

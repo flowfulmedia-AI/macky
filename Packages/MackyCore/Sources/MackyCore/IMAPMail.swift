@@ -155,7 +155,10 @@ public enum IMAPKit {
             var lastEnd = 0
             for match in expression.matches(in: result, range: NSRange(location: 0, length: nsText.length)) {
                 rebuilt += nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
-                rebuilt += nsText.substring(with: match.range(at: 1)).split(separator: " ").joined(separator: " OR ")
+                // Quoted phrases inside the braces stay whole.
+                rebuilt += tokenize(nsText.substring(with: match.range(at: 1)))
+                    .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
+                    .joined(separator: " OR ")
                 lastEnd = match.range.location + match.range.length
             }
             result = rebuilt + nsText.substring(from: lastEnd)

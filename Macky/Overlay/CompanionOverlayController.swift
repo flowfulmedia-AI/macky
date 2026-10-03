@@ -101,7 +101,7 @@ final class CompanionOverlayController {
     func endInteraction(afterDelay delay: TimeInterval) {
         cancelPendingHide()
         let hideWorkItem = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 self?.hideImmediately()
             }
         }
@@ -141,7 +141,7 @@ final class CompanionOverlayController {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 flightCompletion = continuation
                 let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-                    MainActor.assumeIsolated {
+                    MainThread.run {
                         guard let self else { return }
                         let elapsedFraction = Date().timeIntervalSince(flightStartDate) / flightDuration
                         let easedProgress = ScreenGeometry.easeInOut(elapsedFraction)
@@ -200,7 +200,7 @@ final class CompanionOverlayController {
     private func startFollowingMouse() {
         guard mouseFollowTimer == nil else { return }
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            MainThread.run {
                 self?.model.cursorTipPosition = CompanionOverlayController.followPosition()
             }
         }

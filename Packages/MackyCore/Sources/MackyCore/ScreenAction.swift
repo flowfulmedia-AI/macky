@@ -58,6 +58,7 @@ public enum ScreenAction: Equatable, Sendable {
     case runAgent(name: String, request: String?)
     case readErrorLog
     case saveEmailAttachments(identifiers: [String], folder: String, savesEmailWithoutAttachment: Bool)
+    case collectInvoices(services: [String], month: String, folder: String)
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -172,6 +173,13 @@ public enum ScreenAction: Equatable, Sendable {
             guard !identifiers.isEmpty, let folder = Self.nonEmptyString(arguments["folder"]) else { return nil }
             self = .saveEmailAttachments(identifiers: identifiers, folder: folder,
                                          savesEmailWithoutAttachment: (arguments["save_email_if_no_attachment"] as? Bool) ?? true)
+        case .collectInvoices:
+            var services = (arguments["services"] as? [Any])?.compactMap { Self.nonEmptyString($0) } ?? []
+            if services.isEmpty, let text = Self.nonEmptyString(arguments["services"]) {
+                services = text.components(separatedBy: CharacterSet(charactersIn: ",\n")).compactMap { Self.nonEmptyString($0) }
+            }
+            guard !services.isEmpty, let month = Self.nonEmptyString(arguments["month"]), let folder = Self.nonEmptyString(arguments["folder"]) else { return nil }
+            self = .collectInvoices(services: services, month: month, folder: folder)
         case .searchDrive:
             guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
             self = .searchDrive(query: query)
@@ -271,6 +279,8 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută în email" + (account.map { " (\($0))" } ?? "") + ": \(query)"
         case .readEmail:
             return "Citește un email"
+        case .collectInvoices(let services, let month, _):
+            return "Strânge facturile pe \(month) (\(services.count) servicii)"
         case .saveEmailAttachments(let identifiers, let folder, _):
             return "Salvează atașamentele din \(identifiers.count) email\(identifiers.count == 1 ? "" : "uri") în „\((folder as NSString).lastPathComponent)”"
         case .searchDrive(let query):
@@ -322,7 +332,7 @@ public enum ScreenAction: Equatable, Sendable {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
              .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent, .readErrorLog,
-             .saveEmailAttachments: return true
+             .saveEmailAttachments, .collectInvoices: return true
         default: return false
         }
     }
@@ -332,7 +342,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .saveEmailAttachments: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .saveEmailAttachments, .collectInvoices: return true
         default: return false
         }
     }

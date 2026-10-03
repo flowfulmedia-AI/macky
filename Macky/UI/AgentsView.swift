@@ -263,10 +263,10 @@ private struct AgentDetailView: View {
     private var warning: String? {
         guard !agent.driveFolder.isEmpty else { return nil }
         if !googleAccountManager.isConnected {
-            return "Google nu e conectat: conectează-l în Setări → Conexiuni → Gmail și Drive, ca agentul să poată salva în Drive."
+            return "Google nu e conectat: conectează-l în Setări → Conexiuni → Email și Drive, ca agentul să poată salva în Drive."
         }
         if !googleAccountManager.canWriteToDriveFolders {
-            return "Macky are nevoie de permisiunea nouă de scriere în Drive: Setări → Conexiuni → Gmail și Drive → Deconectează, apoi Conectează din nou."
+            return "Macky are nevoie de permisiunea nouă de scriere în Drive: Setări → Conexiuni → Email și Drive → Deconectează, apoi Conectează din nou."
         }
         if AgentKit.driveFolderIdentifier(from: agent.driveFolder) == nil {
             return "Linkul folderului din Drive nu pare corect. Modifică agentul și pune linkul complet al folderului."
@@ -415,7 +415,7 @@ struct AgentEditorView: View {
 
                     SettingsGroup(title: "Unde pune rezultatul",
                                   footer: canWriteToDrive || draft.driveFolder.isEmpty ? "Fără folder, documentul ajunge în Documents/Macky/Agenti."
-                                  : "Pentru Drive, Macky are nevoie de permisiunea de scriere: Setări → Conexiuni → Gmail și Drive → Deconectează, apoi Conectează.") {
+                                  : "Pentru Drive, Macky are nevoie de permisiunea de scriere: Setări → Conexiuni → Email și Drive → Deconectează, apoi Conectează.") {
                         SettingsBlock {
                             TextField("Link folder Google Drive (opțional)", text: $draft.driveFolder).mackyField()
                             if !draft.driveFolder.isEmpty && AgentKit.driveFolderIdentifier(from: draft.driveFolder) == nil {

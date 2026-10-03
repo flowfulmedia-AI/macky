@@ -309,15 +309,17 @@ public enum OpenRouterRequestBuilder {
             properties = ["path": ["type": "string"]]
             required = ["path"]
         case .searchGmail:
-            description = "Searches the user's Gmail (read-only) with Gmail search syntax, e.g. 'from:andrei factura', "
-                + "'is:unread newer_than:1d', 'subject:ofertă after:2026/09/01'. Returns id, date, sender, subject and snippet for each email."
+            description = "Searches all the user's connected email accounts (Gmail accounts and others such as Yahoo; read-only) with Gmail search syntax, "
+                + "e.g. 'from:andrei factura', 'is:unread newer_than:1d', 'subject:ofertă after:2026/09/01'. "
+                + "Returns id, account, date, sender, subject (and a snippet for Gmail) for each email."
             properties = [
                 "query": ["type": "string"],
-                "max_results": ["type": "integer", "description": "Default 10, at most 25."]
+                "max_results": ["type": "integer", "description": "Per account. Default 10, at most 25."],
+                "account": ["type": "string", "description": "Optional: only this account, by email address or a clear part of it (e.g. 'yahoo')."]
             ]
             required = ["query"]
         case .readEmail:
-            description = "Reads one Gmail email in full, by the id from search_gmail."
+            description = "Reads one email in full, by the id from search_gmail (any account)."
             properties = ["id": ["type": "string"]]
             required = ["id"]
         case .searchDrive:

@@ -45,7 +45,7 @@ public enum ScreenAction: Equatable, Sendable {
     case searchFiles(query: String, kind: String)
     case readFile(path: String)
     case openFile(path: String)
-    case searchGmail(query: String, maximumResults: Int)
+    case searchGmail(query: String, maximumResults: Int, account: String? = nil)
     case readEmail(identifier: String)
     case searchDrive(query: String)
     case readDriveFile(identifier: String)
@@ -157,7 +157,8 @@ public enum ScreenAction: Equatable, Sendable {
             self = .openFile(path: path)
         case .searchGmail:
             guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
-            self = .searchGmail(query: query, maximumResults: min(max(OpenRouterStreamDecoder.integerValue(arguments["max_results"]) ?? 10, 1), 25))
+            self = .searchGmail(query: query, maximumResults: min(max(OpenRouterStreamDecoder.integerValue(arguments["max_results"]) ?? 10, 1), 25),
+                                account: Self.nonEmptyString(arguments["account"]))
         case .readEmail:
             guard let identifier = Self.nonEmptyString(arguments["id"]) else { return nil }
             self = .readEmail(identifier: identifier)
@@ -254,8 +255,8 @@ public enum ScreenAction: Equatable, Sendable {
             return "Citește \((path as NSString).lastPathComponent)"
         case .openFile(let path):
             return "Deschide \((path as NSString).lastPathComponent)"
-        case .searchGmail(let query, _):
-            return "Caută în Gmail: \(query)"
+        case .searchGmail(let query, _, let account):
+            return "Caută în email" + (account.map { " (\($0))" } ?? "") + ": \(query)"
         case .readEmail:
             return "Citește un email"
         case .searchDrive(let query):

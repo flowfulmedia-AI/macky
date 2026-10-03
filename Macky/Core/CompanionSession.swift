@@ -48,6 +48,7 @@ final class CompanionSession: ObservableObject {
     let zoomMeetingsManager: ZoomMeetingsManager
     let whatsAppController: WhatsAppController
     let chatArchiveStore = ChatArchiveStore()
+    let mailAccountsStore = MailAccountsStore()
     /// Set by the app once created; lets the user start their agents by voice.
     var agentStore: AgentStore?
     /// The routine being run, if the current request is one.
@@ -980,6 +981,9 @@ final class CompanionSession: ObservableObject {
         if useToolCalling {
             tools += MackyTool.informationTools.filter { tool in
                 if tool == .useSkill { return !skills.isEmpty }
+                if tool == .searchGmail || tool == .readEmail {
+                    return googleAccountManager.isConnected || !googleAccountManager.additionalGmailAddresses.isEmpty || mailAccountsStore.hasAccounts
+                }
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
                 if MackyTool.whatsAppTools.contains(tool) { return whatsAppController.isAvailable }
                 if MackyTool.pastChatTools.contains(tool) { return !chatArchiveStore.isEmpty }
@@ -1372,10 +1376,15 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: await localFileSearch.search(query, kind: kind))
         case .readFile(let path):
             return .done(action.userFacingDescription, resultDetail: FileTextReader.readLocalFile(atPath: path))
-        case .searchGmail(let query, let maximumResults):
-            overlayController.setBubbleText("Caut în Gmail…")
-            return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchGmail(query: query, maximumResults: maximumResults))
+        case .searchGmail(let query, let maximumResults, let account):
+            overlayController.setBubbleText("Caut în email…")
+            var lines = await googleAccountManager.searchGmailLines(query: query, maximumResults: maximumResults, accountFilter: account)
+            lines += await mailAccountsStore.search(query: query, maximumResults: maximumResults, accountFilter: account)
+            return .done(action.userFacingDescription, resultDetail: lines.isEmpty ? "No emails match \"\(query)\"." : lines.joined(separator: "\n"))
         case .readEmail(let identifier):
+            if identifier.hasPrefix("imap:") {
+                return .done(action.userFacingDescription, resultDetail: await mailAccountsStore.read(identifier: identifier))
+            }
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readEmail(identifier: identifier))
         case .searchDrive(let query):
             overlayController.setBubbleText("Caut în Google Drive…")

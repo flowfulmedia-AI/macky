@@ -29,7 +29,7 @@ public enum GoogleOAuth {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             // A refresh token, so the user signs in only once.
             URLQueryItem(name: "access_type", value: "offline"),
-            URLQueryItem(name: "prompt", value: "consent"),
+            URLQueryItem(name: "prompt", value: "consent select_account"),
             URLQueryItem(name: "state", value: state)
         ]
         return components.url!

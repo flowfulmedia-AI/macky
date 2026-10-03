@@ -99,7 +99,7 @@ public enum MackyPrompt {
 
         Finding things:
         - Files on the Mac: search_files, then read_file to read one or open_file to show it.
-        - Email: search_gmail (Gmail search syntax), then read_email for the full text. The user uses Gmail, never Apple Mail.
+        - Email: search_gmail (Gmail search syntax) searches all the user's accounts at once (several Gmail accounts, Yahoo and others; use "account" to pick one), then read_email for the full text. Never use Apple Mail.
         - Google Drive: search_drive, then read_drive_file, or open_url with its link to show it.
         - The user's agents (when run_agent is offered): when they ask to run or start an agent ("rulează agentul Romeo"), call run_agent with its name; it works alone in the background, so just say it started.
         - Past Claude and ChatGPT chats (when offered): search_past_chats, then read_past_chat, when the user mentions something from those chats or a Claude project.

@@ -19,6 +19,9 @@ final class GoogleAccountManager: ObservableObject {
     @Published private(set) var connectedEmailAddress: String?
     @Published private(set) var statusText: String?
     @Published private(set) var isConnecting = false
+    /// More Gmail accounts, read-only, searched together with the main one. Drive and agents use the main account.
+    @Published private(set) var additionalGmailAddresses: [String] = UserDefaults.standard.stringArray(forKey: "googleAdditionalAccounts") ?? []
+    private var additionalAccessTokens: [String: (token: String, expiry: Date)] = [:]
 
     private var clientIdentifier: String?
     private var clientSecret: String?
@@ -66,9 +69,68 @@ final class GoogleAccountManager: ObservableObject {
 
     /// Opens Google's sign-in page in the browser and waits for it to redirect back to a local port.
     func connect() async {
+        guard let tokens = await authorize() else { return }
+        guard let newRefreshToken = tokens.refreshToken else {
+            statusText = "Google nu a trimis un refresh token. Deconectează Macky din contul Google și încearcă din nou."
+            return
+        }
+        do {
+            try KeychainStore.writeString(newRefreshToken, service: Self.keychainService, account: "refresh-token")
+        } catch {
+            statusText = "Conectarea a eșuat: \(error.localizedDescription)"
+            return
+        }
+        refreshToken = newRefreshToken
+        accessToken = tokens.accessToken
+        accessTokenExpiryDate = Date().addingTimeInterval(tokens.expiresInSeconds - 60)
+        UserDefaults.standard.set(tokens.grantedScope, forKey: Self.grantedScopeDefaultsKey)
+        canWriteToDriveFolders = GoogleOAuth.grantsDriveWrite(tokens.grantedScope)
+        isConnected = true
+        await loadProfile()
+        statusText = "Conectat" + (connectedEmailAddress.map { " ca \($0)" } ?? "") + "."
+    }
+
+    /// Adds another Gmail account (pick it in Google's account chooser). Its mail is searched together with the main account's.
+    func connectAdditionalGmail() async {
+        guard let tokens = await authorize() else { return }
+        guard let newRefreshToken = tokens.refreshToken else {
+            statusText = "Google nu a trimis un refresh token. Încearcă din nou."
+            return
+        }
+        guard let emailAddress = await emailAddress(accessToken: tokens.accessToken) else {
+            statusText = "Nu am putut citi adresa contului adăugat."
+            return
+        }
+        if emailAddress.lowercased() == connectedEmailAddress?.lowercased() {
+            statusText = "\(emailAddress) e deja contul principal. Alege alt cont în fereastra Google."
+            return
+        }
+        do {
+            try KeychainStore.writeString(newRefreshToken, service: Self.keychainService, account: "refresh-token|" + emailAddress.lowercased())
+        } catch {
+            statusText = "Nu am putut salva contul: \(error.localizedDescription)"
+            return
+        }
+        additionalAccessTokens[emailAddress.lowercased()] = (tokens.accessToken, Date().addingTimeInterval(tokens.expiresInSeconds - 60))
+        if !additionalGmailAddresses.contains(where: { $0.lowercased() == emailAddress.lowercased() }) {
+            additionalGmailAddresses.append(emailAddress)
+            UserDefaults.standard.set(additionalGmailAddresses, forKey: "googleAdditionalAccounts")
+        }
+        statusText = "Am adăugat \(emailAddress)."
+    }
+
+    func removeAdditionalGmail(_ emailAddress: String) {
+        KeychainStore.delete(service: Self.keychainService, account: "refresh-token|" + emailAddress.lowercased())
+        additionalAccessTokens[emailAddress.lowercased()] = nil
+        additionalGmailAddresses.removeAll { $0.lowercased() == emailAddress.lowercased() }
+        UserDefaults.standard.set(additionalGmailAddresses, forKey: "googleAdditionalAccounts")
+    }
+
+    /// The browser sign-in; returns the tokens, or nil after showing why it did not work.
+    private func authorize() async -> GoogleOAuth.Tokens? {
         guard let clientIdentifier, let clientSecret, hasClientCredentials else {
             statusText = "Adaugă întâi Client ID și Client secret."
-            return
+            return nil
         }
         isConnecting = true
         statusText = "Se deschide Google în browser…"
@@ -90,11 +152,11 @@ final class GoogleAccountManager: ObservableObject {
             let callback = try await waitForCallback(on: listener)
             if let error = callback.error {
                 statusText = error == "access_denied" ? "Accesul a fost refuzat." : "Google a răspuns cu eroarea: \(error)"
-                return
+                return nil
             }
             guard callback.state == state, let code = callback.code else {
                 statusText = "Răspuns neașteptat de la Google. Încearcă din nou."
-                return
+                return nil
             }
             var request = URLRequest(url: GoogleOAuth.tokenEndpoint)
             request.httpMethod = "POST"
@@ -102,23 +164,19 @@ final class GoogleAccountManager: ObservableObject {
             request.httpBody = GoogleOAuth.authorizationCodeRequestBody(code: code, clientIdentifier: clientIdentifier, clientSecret: clientSecret,
                                                                           redirectURI: redirectURI, codeVerifier: codeVerifier)
             let (data, _) = try await urlSession.data(for: request)
-            let tokens = try GoogleOAuth.parseTokenResponse(data)
-            guard let newRefreshToken = tokens.refreshToken else {
-                statusText = "Google nu a trimis un refresh token. Deconectează Macky din contul Google și încearcă din nou."
-                return
-            }
-            try KeychainStore.writeString(newRefreshToken, service: Self.keychainService, account: "refresh-token")
-            refreshToken = newRefreshToken
-            accessToken = tokens.accessToken
-            accessTokenExpiryDate = Date().addingTimeInterval(tokens.expiresInSeconds - 60)
-            UserDefaults.standard.set(tokens.grantedScope, forKey: Self.grantedScopeDefaultsKey)
-            canWriteToDriveFolders = GoogleOAuth.grantsDriveWrite(tokens.grantedScope)
-            isConnected = true
-            await loadProfile()
-            statusText = "Conectat" + (connectedEmailAddress.map { " ca \($0)" } ?? "") + "."
+            return try GoogleOAuth.parseTokenResponse(data)
         } catch {
             statusText = "Conectarea a eșuat: \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    private func emailAddress(accessToken: String) async -> String? {
+        var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/profile")!)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        guard let (data, _) = try? await urlSession.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["emailAddress"] as? String
     }
 
     private func loadProfile() async {
@@ -177,7 +235,9 @@ final class GoogleAccountManager: ObservableObject {
 
     // MARK: Authorized requests
 
-    private func validAccessToken() async throws -> String {
+    /// `account` nil = the main account; otherwise one of the additional Gmail addresses.
+    private func validAccessToken(account: String? = nil) async throws -> String {
+        if let account { return try await additionalAccessToken(for: account.lowercased()) }
         if let accessToken, let accessTokenExpiryDate, Date() < accessTokenExpiryDate { return accessToken }
         guard let refreshToken, let clientIdentifier, let clientSecret else {
             throw GoogleOAuth.OAuthError(message: "Contul Google nu e conectat. Conectează-l în Setări → Conexiuni.")
@@ -202,18 +262,34 @@ final class GoogleAccountManager: ObservableObject {
         }
     }
 
-    private func authorizedData(from url: URL, allowRetry: Bool = true) async throws -> Data {
-        try await authorizedData(for: URLRequest(url: url), allowRetry: allowRetry)
+    private func additionalAccessToken(for account: String) async throws -> String {
+        if let cached = additionalAccessTokens[account], Date() < cached.expiry { return cached.token }
+        guard let refreshToken = KeychainStore.readString(service: Self.keychainService, account: "refresh-token|" + account),
+              let clientIdentifier, let clientSecret else {
+            throw GoogleOAuth.OAuthError(message: "Contul \(account) nu mai e conectat. Adaugă-l din nou în Setări → Conexiuni → Email și Drive.")
+        }
+        var request = URLRequest(url: GoogleOAuth.tokenEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = GoogleOAuth.refreshRequestBody(refreshToken: refreshToken, clientIdentifier: clientIdentifier, clientSecret: clientSecret)
+        let (data, _) = try await urlSession.data(for: request)
+        let tokens = try GoogleOAuth.parseTokenResponse(data)
+        additionalAccessTokens[account] = (tokens.accessToken, Date().addingTimeInterval(tokens.expiresInSeconds - 60))
+        return tokens.accessToken
     }
 
-    private func authorizedData(for originalRequest: URLRequest, allowRetry: Bool = true) async throws -> Data {
+    private func authorizedData(from url: URL, allowRetry: Bool = true, account: String? = nil) async throws -> Data {
+        try await authorizedData(for: URLRequest(url: url), allowRetry: allowRetry, account: account)
+    }
+
+    private func authorizedData(for originalRequest: URLRequest, allowRetry: Bool = true, account: String? = nil) async throws -> Data {
         var request = originalRequest
-        request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(try await validAccessToken(account: account))", forHTTPHeaderField: "Authorization")
         let (data, response) = try await urlSession.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
         if statusCode == 401 && allowRetry {
-            accessToken = nil
-            return try await authorizedData(for: originalRequest, allowRetry: false)
+            if let account { additionalAccessTokens[account.lowercased()] = nil } else { accessToken = nil }
+            return try await authorizedData(for: originalRequest, allowRetry: false, account: account)
         }
         guard (200..<300).contains(statusCode) else {
             let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -259,7 +335,7 @@ final class GoogleAccountManager: ObservableObject {
         } catch let error as GoogleOAuth.OAuthError where error.message.lowercased().contains("not found") || error.message.lowercased().contains("insufficient") {
             throw GoogleOAuth.OAuthError(message: canWriteToDriveFolders
                 ? "Nu găsesc folderul din Drive. Verifică linkul folderului în setările agentului."
-                : "Macky nu are încă voie să scrie în folderele tale din Drive. Setări → Conexiuni → Gmail și Drive → Deconectează, apoi Conectează din nou.")
+                : "Macky nu are încă voie să scrie în folderele tale din Drive. Setări → Conexiuni → Email și Drive → Deconectează, apoi Conectează din nou.")
         }
     }
 
@@ -283,36 +359,68 @@ final class GoogleAccountManager: ObservableObject {
 
     // MARK: Gmail
 
-    func searchGmail(query: String, maximumResults: Int) async -> String {
-        do {
-            let identifiers = GmailAPI.parseMessageIdentifiers(try await authorizedData(from: GmailAPI.searchURL(query: query, maximumResults: maximumResults)))
-            guard !identifiers.isEmpty else { return "No emails match \"\(query)\"." }
-            // One token refresh up front, not one per parallel request.
-            _ = try await validAccessToken()
-            var messages: [Int: GmailMessage] = [:]
-            try await withThrowingTaskGroup(of: (Int, GmailMessage?).self) { group in
-                for (index, identifier) in identifiers.enumerated() {
-                    group.addTask {
-                        let data = try await self.authorizedData(from: GmailAPI.messageURL(identifier: identifier, full: false))
-                        return (index, GmailAPI.parseMessage(data))
-                    }
+    /// Every connected Gmail account (or only the one matching `accountFilter`); one line per email.
+    func searchGmailLines(query: String, maximumResults: Int, accountFilter: String?) async -> [String] {
+        let wanted = accountFilter?.lowercased()
+        var accounts: [String?] = []
+        if isConnected, wanted.map({ (connectedEmailAddress ?? "").lowercased().contains($0) }) ?? true { accounts.append(nil) }
+        accounts += additionalGmailAddresses.filter { address in wanted.map { address.lowercased().contains($0) } ?? true }.map { Optional($0) }
+        var lines: [String] = []
+        for account in accounts {
+            let label = account ?? connectedEmailAddress ?? "Gmail"
+            do {
+                let messages = try await searchMessages(query: query, maximumResults: maximumResults, account: account)
+                lines += messages.map { message in
+                    let identifier = account.map { "gmail:\($0.lowercased())#\(message.identifier)" } ?? message.identifier
+                    var line = message.summaryLine.replacingOccurrences(of: "id=\(message.identifier)", with: "id=\(identifier)")
+                    if !additionalGmailAddresses.isEmpty { line = line.replacingOccurrences(of: "id=\(identifier) |", with: "id=\(identifier) | account: \(label) |") }
+                    return line
                 }
-                for try await (index, message) in group {
-                    if let message { messages[index] = message }
-                }
+            } catch {
+                lines.append("\(label): Gmail search failed (\(error.localizedDescription))")
             }
-            return messages.keys.sorted().compactMap { messages[$0]?.summaryLine }.joined(separator: "\n")
-        } catch {
-            return "Gmail search failed: \(error.localizedDescription)"
         }
+        return lines
     }
 
+    func searchGmail(query: String, maximumResults: Int) async -> String {
+        let lines = await searchGmailLines(query: query, maximumResults: maximumResults, accountFilter: nil)
+        return lines.isEmpty ? "No emails match \"\(query)\"." : lines.joined(separator: "\n")
+    }
+
+    private func searchMessages(query: String, maximumResults: Int, account: String?) async throws -> [GmailMessage] {
+        let identifiers = GmailAPI.parseMessageIdentifiers(try await authorizedData(from: GmailAPI.searchURL(query: query, maximumResults: maximumResults), account: account))
+        guard !identifiers.isEmpty else { return [] }
+        // One token refresh up front, not one per parallel request.
+        _ = try await validAccessToken(account: account)
+        var messages: [Int: GmailMessage] = [:]
+        try await withThrowingTaskGroup(of: (Int, GmailMessage?).self) { group in
+            for (index, identifier) in identifiers.enumerated() {
+                group.addTask {
+                    let data = try await self.authorizedData(from: GmailAPI.messageURL(identifier: identifier, full: false), account: account)
+                    return (index, GmailAPI.parseMessage(data))
+                }
+            }
+            for try await (index, message) in group {
+                if let message { messages[index] = message }
+            }
+        }
+        return messages.keys.sorted().compactMap { messages[$0] }
+    }
+
+    /// Reads one email by the id from a search ("gmail:ana@gmail.com#18c…" for additional accounts).
     func readEmail(identifier: String) async -> String {
+        var account: String?
+        var messageIdentifier = identifier
+        if identifier.hasPrefix("gmail:"), let hash = identifier.lastIndex(of: "#") {
+            account = String(identifier[identifier.index(identifier.startIndex, offsetBy: 6)..<hash])
+            messageIdentifier = String(identifier[identifier.index(after: hash)...])
+        }
         do {
-            guard let message = GmailAPI.parseMessage(try await authorizedData(from: GmailAPI.messageURL(identifier: identifier, full: true))) else {
+            guard let message = GmailAPI.parseMessage(try await authorizedData(from: GmailAPI.messageURL(identifier: messageIdentifier, full: true), account: account)) else {
                 return "Could not read this email."
             }
-            return GmailAPI.readableMessage(message)
+            return (account.map { "Account: \($0)\n" } ?? "") + GmailAPI.readableMessage(message)
         } catch {
             return "Could not read the email: \(error.localizedDescription)"
         }

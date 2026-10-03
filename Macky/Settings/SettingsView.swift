@@ -25,7 +25,7 @@ struct SettingsView: View {
             case .memory: return "Memorie"
             case .skills: return "Skills"
             case .aiAccounts: return "Claude și ChatGPT"
-            case .google: return "Gmail și Drive"
+            case .google: return "Email și Drive"
             case .whatsApp: return "WhatsApp"
             case .zoom: return "Zoom"
             case .apps: return "Aplicații (MCP)"
@@ -184,7 +184,7 @@ struct SettingsView: View {
         case .memory: MemorySettingsPage(settings: settings, memoryManager: memoryManager, openMemory: openMemory, openHistory: openHistory)
         case .skills: SkillsPage(settings: settings, skillLibrary: skillLibrary)
         case .aiAccounts: AIAccountsPage(store: session.chatArchiveStore, skillLibrary: skillLibrary)
-        case .google: GooglePage(googleAccountManager: googleAccountManager)
+        case .google: GooglePage(googleAccountManager: googleAccountManager, mailAccountsStore: session.mailAccountsStore)
         case .whatsApp: WhatsAppPage(settings: settings, controller: whatsAppController)
         case .zoom: ZoomPage(manager: zoomMeetingsManager, googleConnected: googleAccountManager.isConnected)
         case .apps: AppsPage(store: mcpConnectionStore)
@@ -908,13 +908,18 @@ private struct AIAccountsPage: View {
 
 private struct GooglePage: View {
     @ObservedObject var googleAccountManager: GoogleAccountManager
+    @ObservedObject var mailAccountsStore: MailAccountsStore
+    @State private var provider: IMAPAccount.Provider = .yahoo
+    @State private var imapEmail = ""
+    @State private var imapPassword = ""
+    @State private var imapHost = ""
     @State private var clientIdentifier = ""
     @State private var clientSecret = ""
     @State private var saveError: String?
 
     var body: some View {
-        SettingsPage(title: "Gmail și Drive", subtitle: "Macky caută și citește mailuri și fișiere, și creează documente noi (notițele meetingurilor, documentele agenților) în folderele alese de tine. Nu trimite mailuri și nu modifică sau șterge fișierele tale.") {
-            SettingsGroup(title: "Cont") {
+        SettingsPage(title: "Email și Drive", subtitle: "Macky caută și citește mailuri din toate conturile tale (Gmail, Yahoo și altele) și fișiere din Drive, și creează documente noi în folderele alese de tine. Nu trimite mailuri și nu modifică sau șterge nimic.") {
+            SettingsGroup(title: "Contul Google principal · Gmail, Drive, agenți") {
                 SettingsRow(title: googleAccountManager.isConnected ? (googleAccountManager.connectedEmailAddress ?? "Conectat") : "Neconectat",
                             subtitle: googleAccountManager.isConnected
                                 ? (googleAccountManager.canWriteToDriveFolders ? "„Ce mi-a scris Andrei ieri?”, „găsește contractul Nordic”." : "Ca agenții să poată salva în folderele tale din Drive: Deconectează, apoi Conectează din nou (permisiune nouă).")
@@ -934,6 +939,66 @@ private struct GooglePage: View {
                     SettingsBlock { SettingsMessage(text: statusText) }
                 }
             }
+            SettingsGroup(title: "Alte conturi Gmail",
+                          footer: "Fiecare adresă trebuie adăugată o dată ca Test user în Google Cloud → Google Auth Platform → Audience (dacă aplicația ta nu e publicată). În fereastra Google alegi contul pe care vrei să-l adaugi.") {
+                ForEach(googleAccountManager.additionalGmailAddresses, id: \.self) { address in
+                    SettingsRow(title: address, subtitle: "Doar citire mailuri") {
+                        Button("Elimină") { googleAccountManager.removeAdditionalGmail(address) }.buttonStyle(MackySecondaryPillStyle())
+                    }
+                    SettingsDivider()
+                }
+                SettingsBlock {
+                    Button(googleAccountManager.isConnecting ? "Se conectează…" : "Adaugă alt cont Gmail") {
+                        Task { await googleAccountManager.connectAdditionalGmail() }
+                    }
+                    .buttonStyle(MackyPrimaryPillStyle())
+                    .disabled(!googleAccountManager.hasClientCredentials || googleAccountManager.isConnecting)
+                }
+            }
+
+            SettingsGroup(title: "Yahoo, iCloud, Outlook și alte conturi", footer: provider.appPasswordHelp + " Macky doar citește: nu marchează mailurile ca citite, nu mută și nu șterge nimic.") {
+                ForEach(mailAccountsStore.accounts) { account in
+                    SettingsRow(title: account.emailAddress, subtitle: account.host) {
+                        Button("Elimină") { mailAccountsStore.remove(account) }.buttonStyle(MackySecondaryPillStyle())
+                    }
+                    SettingsDivider()
+                }
+                SettingsRow(title: "Furnizor") {
+                    Picker("", selection: $provider) {
+                        ForEach(IMAPAccount.Provider.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .settingsMenu()
+                }
+                SettingsDivider()
+                SettingsBlock {
+                    TextField("Adresa de email (ex. nume@yahoo.com)", text: $imapEmail).mackyField()
+                        .onChange(of: imapEmail) { _, newValue in
+                            let guessed = IMAPAccount.Provider.guess(for: newValue)
+                            if guessed != .other { provider = guessed }
+                        }
+                    SecureField("Parola de aplicație (nu parola obișnuită)", text: $imapPassword).mackyField()
+                    if provider == .other {
+                        TextField("Server IMAP (ex. imap.exemplu.ro)", text: $imapHost).mackyField()
+                    }
+                    HStack {
+                        Button(mailAccountsStore.isWorking ? "Verific…" : "Adaugă contul") {
+                            Task {
+                                await mailAccountsStore.add(emailAddress: imapEmail, password: imapPassword, host: provider.host ?? imapHost)
+                                if mailAccountsStore.accounts.contains(where: { $0.emailAddress.lowercased() == imapEmail.lowercased().trimmingCharacters(in: .whitespaces) }) {
+                                    imapEmail = ""
+                                    imapPassword = ""
+                                    imapHost = ""
+                                }
+                            }
+                        }
+                        .buttonStyle(MackyPrimaryPillStyle())
+                        .disabled(mailAccountsStore.isWorking || imapEmail.isEmpty || imapPassword.isEmpty || (provider == .other && imapHost.isEmpty))
+                        Spacer()
+                    }
+                    if let statusText = mailAccountsStore.statusText { SettingsMessage(text: statusText) }
+                }
+            }
+
             SettingsGroup(title: "Clientul tău Google · o singură dată, ~10 minute") {
                 SettingsBlock {
                     SettingsSteps(steps: [
@@ -1051,7 +1116,7 @@ private struct ZoomPage: View {
                 }
                 if !googleConnected {
                     SettingsDivider()
-                    SettingsBlock { SettingsMessage(text: "Nu găsesc Google conectat: conectează-l la „Gmail și Drive”, ca notițele să ajungă în Drive.") }
+                    SettingsBlock { SettingsMessage(text: "Nu găsesc Google conectat: conectează-l la „Email și Drive”, ca notițele să ajungă în Drive.") }
                 }
                 SettingsDivider()
                 SettingsRow(title: "Folder în Drive") {

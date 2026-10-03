@@ -136,6 +136,7 @@ final class AgentStore: ObservableObject {
             guard !Task.isCancelled else { return }
             finishedRun.status = .failed
             finishedRun.summary = CompanionSession.userFacingMessage(for: error)
+            ErrorLogStore.shared.record("Agent \(agent.name)", finishedRun.summary, details: String(describing: error))
         }
         finishedRun.finishedAt = Date()
         let completed = finishedRun
@@ -210,10 +211,15 @@ final class AgentStore: ObservableObject {
     /// The skill's SKILL.md plus the reference files next to it (examples, product pages, rules), within a size limit.
     private static func fullSkillText(_ skill: SkillDefinition) -> String {
         var text = skill.instructions
-        let folder = URL(fileURLWithPath: skill.sourcePath).deletingLastPathComponent()
+        let skillFile = URL(fileURLWithPath: skill.sourcePath)
+        // Only a skill with its own folder (…/macky-romeo/SKILL.md) brings its neighbours; a lone .md file shares its folder with other skills.
+        guard !skill.sourcePath.isEmpty, skillFile.lastPathComponent.lowercased() == "skill.md" else { return text }
+        let folder = skillFile.deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
         var files: [URL] = []
-        while let fileURL = enumerator?.nextObject() as? URL {
+        var visited = 0
+        while let fileURL = enumerator?.nextObject() as? URL, visited < 2_000 {
+            visited += 1
             let fileExtension = fileURL.pathExtension.lowercased()
             if ["md", "txt"].contains(fileExtension), fileURL.lastPathComponent.lowercased() != "skill.md" { files.append(fileURL) }
         }
@@ -251,6 +257,7 @@ final class AgentStore: ObservableObject {
                 for runIndex in saved[agentIndex].runs.indices where saved[agentIndex].runs[runIndex].status == .running {
                     saved[agentIndex].runs[runIndex].status = .failed
                     saved[agentIndex].runs[runIndex].summary = "Întrerupt (Macky s-a închis)."
+                    ErrorLogStore.shared.record("Agent \(saved[agentIndex].name)", "Rularea a fost întreruptă: Macky s-a închis în timp ce agentul lucra. Cauza apare mai jos, la „Închidere neașteptată”, dacă macOS a scris un raport.")
                 }
             }
             agents = saved

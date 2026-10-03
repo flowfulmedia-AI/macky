@@ -1112,6 +1112,7 @@ final class CompanionSession: ObservableObject {
                         if case .whatsAppSend = action { whatsAppSendFailed = true }
                         taskEndedCleanly = false
                         failureReasons.append("\(action.userFacingDescription): \(reason)")
+                        ErrorLogStore.shared.record("Acțiune", "\(action.userFacingDescription): \(reason)", details: lastQuestionText.isEmpty ? "" : "Cererea: \(lastQuestionText)")
                         resultText = "Failed: \(reason)"
                     }
                 } else if toolCall.name == MackyTool.pointAt.rawValue {
@@ -1401,6 +1402,16 @@ final class CompanionSession: ObservableObject {
             }
             agentStore.run(agent.id, extraRequest: request)
             return .done(action.userFacingDescription, resultDetail: "\(agent.name) started in the background.")
+        case .readErrorLog:
+            var report = ErrorLogStore.shared.summaryForAssistant()
+            if let agentStore, !agentStore.agents.isEmpty {
+                report += "\n\nAgents' latest runs:\n" + agentStore.agents.map { agent in
+                    guard let run = agent.runs.first else { return "- \(agent.name): never ran" }
+                    let when = run.startedAt.formatted(date: .abbreviated, time: .shortened)
+                    return "- \(agent.name): \(run.status.rawValue) at \(when) — \(run.summary)"
+                }.joined(separator: "\n")
+            }
+            return .done(action.userFacingDescription, resultDetail: report)
         case .searchPastChats(let query):
             return .done(action.userFacingDescription, resultDetail: chatArchiveStore.search(query))
         case .readPastChat(let title):
@@ -1536,7 +1547,7 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent:
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog:
             break
         case .whatsAppSend(let recipient, let text):
             do {
@@ -1783,6 +1794,7 @@ final class CompanionSession: ObservableObject {
     }
 
     private func fail(with message: String) {
+        ErrorLogStore.shared.record("Comandă", message, details: lastQuestionText.isEmpty ? "" : "Cererea: \(lastQuestionText)")
         state = .failed(message: message)
         lastAnswerText = message
         drawingOverlayController.clear()

@@ -56,6 +56,7 @@ public enum ScreenAction: Equatable, Sendable {
     case searchPastChats(query: String)
     case readPastChat(title: String)
     case runAgent(name: String, request: String?)
+    case readErrorLog
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -189,6 +190,8 @@ public enum ScreenAction: Equatable, Sendable {
         case .runAgent:
             guard let name = Self.nonEmptyString(arguments["name"]) else { return nil }
             self = .runAgent(name: name, request: Self.nonEmptyString(arguments["request"]))
+        case .readErrorLog:
+            self = .readErrorLog
         case .pointAt, .taskDone, .saveFile, .finishTask:
             return nil
         }
@@ -277,6 +280,8 @@ public enum ScreenAction: Equatable, Sendable {
             return "Citește chatul „\(title)”"
         case .runAgent(let name, _):
             return "Pornește agentul „\(name)”"
+        case .readErrorLog:
+            return "Citește jurnalul de erori"
         case .externalTool(let serverName, let toolName, _, _):
             return "\(serverName): \(toolName.replacingOccurrences(of: "_", with: " "))"
         }
@@ -287,7 +292,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .listEvents, .listReminders, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog: return true
         default: return false
         }
     }
@@ -305,7 +310,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent, .readErrorLog: return true
         default: return false
         }
     }

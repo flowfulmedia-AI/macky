@@ -2,11 +2,11 @@ import Charts
 import MackyCore
 import SwiftUI
 
-/// Macky's main window: a sidebar of little characters (home, agents, meetings, memory, history, routines, usage)
+/// Macky's main window: a sidebar of little characters (home, agents, meetings, memory, history, routines, usage, errors)
 /// and the selected section on the right.
 struct HomeView: View {
     enum Section: String, CaseIterable, Identifiable {
-        case home, agents, meetings, memory, history, routines, usage
+        case home, agents, meetings, memory, history, routines, usage, errors
         var id: String { rawValue }
 
         var title: String {
@@ -18,6 +18,7 @@ struct HomeView: View {
             case .history: return "Istoric"
             case .routines: return "Rutine"
             case .usage: return "Consum"
+            case .errors: return "Erori"
             }
         }
 
@@ -30,6 +31,7 @@ struct HomeView: View {
             case .history: return MascotPalette.silver
             case .routines: return MascotPalette.lemon
             case .usage: return MascotPalette.mint.reversed()
+            case .errors: return MascotPalette.peach.reversed()
             }
         }
     }
@@ -45,6 +47,7 @@ struct HomeView: View {
     @ObservedObject var agentStore: AgentStore
     @ObservedObject var skillLibrary: SkillLibrary
     @ObservedObject var googleAccountManager: GoogleAccountManager
+    @ObservedObject var errorLog = ErrorLogStore.shared
     let suggestions: [SuggestionCatalog.Suggestion]
     let openSettings: () -> Void
     /// The smaller version shown under the notch.
@@ -194,6 +197,7 @@ struct HomeView: View {
         case .history: return historyStore.entries.first?.question ?? "Toate cererile tale"
         case .routines: return routineStore.routines.filter(\.isEnabled).map(\.name).joined(separator: ", ")
         case .usage: return usageStore.remainingCredit.map { "\(UsageStore.format($0)) credit rămas" } ?? "Credit OpenRouter"
+        case .errors: return errorLog.entries.first?.message ?? "Nicio eroare"
         }
     }
 
@@ -203,6 +207,9 @@ struct HomeView: View {
             let working = agentManager.runningJobCount + agentStore.runningAgentIdentifiers.count
             return working > 0 ? "\(working)" : nil
         case .history: return historyStore.entries.first.map { $0.date.formatted(date: .omitted, time: .shortened) }
+        case .errors:
+            let recent = errorLog.entries.filter { $0.date > Date().addingTimeInterval(-86_400) }.count
+            return recent > 0 ? "\(recent)" : nil
         case .meetings: return zoomMeetingsManager.processedMeetings.first.map { $0.date.formatted(.dateTime.day().month(.abbreviated)) }
         default: return nil
         }
@@ -251,6 +258,8 @@ struct HomeView: View {
             RoutinesSettingsTab(routineStore: routineStore, session: session).padding(20)
         case .usage:
             UsageView(usageStore: usageStore)
+        case .errors:
+            ErrorsSectionView(errorLog: errorLog)
         }
     }
 }

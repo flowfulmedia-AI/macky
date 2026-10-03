@@ -103,6 +103,7 @@ final class AppEnvironment {
         }
         routineStore.startScheduler()
         agentStore.startScheduler()
+        ErrorLogStore.shared.importCrashReports()
         Task { await mcpConnectionStore.refreshAll() }
         zoomMeetingsManager.start()
         usageStore.start()

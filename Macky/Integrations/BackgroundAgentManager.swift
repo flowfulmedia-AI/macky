@@ -130,6 +130,7 @@ final class BackgroundAgentManager: ObservableObject {
                     messages.append(ChatMessage(role: .user, text: "You are out of steps. Call finish_task now with what you have."))
                 }
             } catch {
+                ErrorLogStore.shared.record("Agent în fundal", CompanionSession.userFacingMessage(for: error), details: String(describing: error))
                 finish(jobIdentifier, status: .failed(CompanionSession.userFacingMessage(for: error)))
                 return
             }

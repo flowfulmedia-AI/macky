@@ -1,4 +1,4 @@
-.PHONY: setup run project open test-core clean
+.PHONY: setup run icon project open test-core clean
 
 # One-time: checks Xcode, installs xcodegen, creates the free signing certificate.
 setup:
@@ -7,6 +7,11 @@ setup:
 # Build, install to ~/Applications and launch.
 run:
 	./scripts/build-and-install.sh
+
+# Rebuild the app icon from an image: make icon IMAGE="~/Downloads/LOGO Macky.png" (make run does it by itself).
+icon:
+	rm -f Macky/Resources/AppIcon.icns Macky/Resources/AppIcon.png
+	./scripts/make-icon.sh "$(IMAGE)"
 
 # Generate Macky.xcodeproj (to work in Xcode).
 project:

@@ -78,6 +78,7 @@ final class GoogleAccountManager: ObservableObject {
             try KeychainStore.writeString(newRefreshToken, service: Self.keychainService, account: "refresh-token")
         } catch {
             statusText = "Conectarea a eșuat: \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Google", statusText ?? "")
             return
         }
         refreshToken = newRefreshToken
@@ -109,6 +110,7 @@ final class GoogleAccountManager: ObservableObject {
             try KeychainStore.writeString(newRefreshToken, service: Self.keychainService, account: "refresh-token|" + emailAddress.lowercased())
         } catch {
             statusText = "Nu am putut salva contul: \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Google", statusText ?? "")
             return
         }
         additionalAccessTokens[emailAddress.lowercased()] = (tokens.accessToken, Date().addingTimeInterval(tokens.expiresInSeconds - 60))
@@ -151,7 +153,10 @@ final class GoogleAccountManager: ObservableObject {
 
             let callback = try await waitForCallback(on: listener)
             if let error = callback.error {
-                statusText = error == "access_denied" ? "Accesul a fost refuzat." : "Google a răspuns cu eroarea: \(error)"
+                statusText = error == "access_denied"
+                    ? "Accesul a fost refuzat. Dacă Google a scris „Access blocked”, adaugă adresa la Test users în Google Cloud Console (Google Auth Platform → Audience)."
+                    : "Google a răspuns cu eroarea: \(error)"
+                ErrorLogStore.shared.record("Google", statusText ?? "")
                 return nil
             }
             guard callback.state == state, let code = callback.code else {
@@ -167,6 +172,7 @@ final class GoogleAccountManager: ObservableObject {
             return try GoogleOAuth.parseTokenResponse(data)
         } catch {
             statusText = "Conectarea a eșuat: \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Google", statusText ?? "")
             return nil
         }
     }
@@ -257,6 +263,7 @@ final class GoogleAccountManager: ObservableObject {
                 // Revoked or expired: the user has to connect again.
                 disconnect()
                 statusText = "Conectarea Google a expirat. Conectează din nou în Setări → Conexiuni."
+                ErrorLogStore.shared.record("Google", statusText ?? "")
             }
             throw error
         }

@@ -51,6 +51,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case readPastChat = "read_past_chat"
     // The user's own agents (Agenți).
     case runAgent = "run_agent"
+    case readErrorLog = "read_error_log"
 
     /// Tools that change something on the computer (as opposed to only showing).
     public static let actionTools: [MackyTool] = [
@@ -69,7 +70,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
         .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
-        .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent
+        .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog
     ]
     /// Need an imported Claude or ChatGPT export.
     public static let pastChatTools: Set<MackyTool> = [.searchPastChats, .readPastChat]
@@ -362,6 +363,11 @@ public enum OpenRouterRequestBuilder {
                 "request": ["type": "string", "description": "Optional extra request for this run only."]
             ]
             required = ["name"]
+        case .readErrorLog:
+            description = "Reads Macky's own error log (failed commands, agents' failed runs with their reason, email or Google problems, "
+                + "unexpected quits) and the latest run of each agent. Use it when the user asks why something failed or did not run."
+            properties = ["about": ["type": "string", "description": "Optional: what the question is about (e.g. 'agent Romeo', 'email')."]]
+            required = []
         case .readPastChat:
             description = "Reads one past Claude or ChatGPT conversation, or a Claude project with its instructions and files, by its title."
             properties = ["title": ["type": "string", "description": "The title from search_past_chats, or a project name."]]

@@ -145,6 +145,7 @@ final class ZoomMeetingsManager: ObservableObject {
             statusText = savedCount > 0 ? "Am salvat \(savedCount) meeting(uri) în Drive (\(time))." : "Nimic nou de procesat (verificat la \(time))."
         } catch {
             statusText = "Eroare Zoom: \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Zoom", error.localizedDescription)
         }
     }
 
@@ -242,6 +243,7 @@ final class ZoomMeetingsManager: ObservableObject {
             statusText = "Conectat la Zoom · \(meetings.count) înregistrări cloud în ultimele 30 de zile."
         } catch {
             statusText = "Eroare Zoom: \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Zoom", error.localizedDescription)
         }
     }
 

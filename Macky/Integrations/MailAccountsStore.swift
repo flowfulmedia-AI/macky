@@ -45,6 +45,7 @@ final class MailAccountsStore: ObservableObject {
             statusText = "Conectat: \(email)."
         } catch {
             statusText = "✗ \(error.localizedDescription)"
+            ErrorLogStore.shared.record("Email \(email)", error.localizedDescription)
         }
     }
 
@@ -77,6 +78,7 @@ final class MailAccountsStore: ObservableObject {
                 }
             } catch {
                 lines.append("\(account.emailAddress): search failed (\(error.localizedDescription))")
+                ErrorLogStore.shared.record("Email \(account.emailAddress)", "Căutarea a eșuat: \(error.localizedDescription)")
             }
         }
         return lines
@@ -97,6 +99,7 @@ final class MailAccountsStore: ObservableObject {
             guard let message else { return "Email not found." }
             return "Account: \(account.emailAddress)\nFrom: \(message.from)\nDate: \(message.date)\nSubject: \(message.subject)\n\n\(message.bodyText)"
         } catch {
+            ErrorLogStore.shared.record("Email \(account.emailAddress)", "Nu am putut citi emailul: \(error.localizedDescription)")
             return "Could not read the email: \(error.localizedDescription)"
         }
     }

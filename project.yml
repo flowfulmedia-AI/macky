@@ -36,6 +36,8 @@ targets:
       path: Macky/Info.plist
       properties:
         CFBundleDisplayName: Macky
+        # Built by scripts/make-icon.sh from Macky/Resources/AppIcon.png.
+        CFBundleIconFile: AppIcon
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)

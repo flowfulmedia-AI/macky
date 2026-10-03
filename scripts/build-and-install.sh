@@ -11,6 +11,8 @@ BUILD_LOG="build/xcodebuild.log"
 command -v xcodegen >/dev/null || { echo "Lipsește xcodegen. Rulează întâi: make setup"; exit 1; }
 mkdir -p build
 
+./scripts/make-icon.sh
+
 echo "→ Generez proiectul Xcode…"
 xcodegen generate --quiet
 
@@ -43,6 +45,8 @@ pkill -x Macky 2>/dev/null || true
 mkdir -p "$INSTALL_DIRECTORY"
 rm -rf "$INSTALL_DIRECTORY/Macky.app"
 ditto "$BUILT_APPLICATION" "$INSTALL_DIRECTORY/Macky.app"
+# Finder and the Dock cache icons; this makes them show the new one.
+touch "$INSTALL_DIRECTORY/Macky.app"
 
 echo "→ Pornesc Macky. Iconița apare în bara de meniu, sus-dreapta."
 open "$INSTALL_DIRECTORY/Macky.app"

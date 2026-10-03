@@ -7,3 +7,4 @@ xcuserdata/
 .swiftpm/
 Packages/MackyCore/.build/
 Macky/Info.plist
+Macky/Resources/AppIcon.icns

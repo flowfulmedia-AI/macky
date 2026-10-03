@@ -104,6 +104,21 @@ final class MailAccountsStore: ObservableObject {
         }
     }
 
+    /// The whole message with its attachments ("imap:ana@yahoo.com#123").
+    func rawMessage(identifier: String) async throws -> Data {
+        let reference = identifier.dropFirst("imap:".count)
+        guard let hash = reference.lastIndex(of: "#"), let uid = Int(reference[reference.index(after: hash)...]),
+              let account = accounts.first(where: { $0.id == reference[..<hash].lowercased() }),
+              let password = KeychainStore.readString(service: Self.secretsService, account: account.id) else {
+            throw IMAPSession.IMAPError(message: "Contul de email nu mai e conectat.")
+        }
+        let session = try await IMAPSession.open(account: account, password: password)
+        let raw = try await session.fetchRaw(uid: uid)
+        await session.logout()
+        guard let raw else { throw IMAPSession.IMAPError(message: "Nu găsesc emailul pe server.") }
+        return raw
+    }
+
     /// IMAP servers search reliably only in ASCII; "factură" finds "factura" and most real spellings.
     private static func asciiFolded(_ text: String) -> String {
         text.folding(options: [.diacriticInsensitive], locale: Locale(identifier: "ro"))
@@ -153,6 +168,11 @@ final class IMAPSession: @unchecked Sendable {
         return IMAPKit.fetchedItems(in: responses).first.map(IMAPKit.message(from:))
     }
 
+    func fetchRaw(uid: Int) async throws -> Data? {
+        let responses = try await run("UID FETCH \(uid) (UID BODY.PEEK[])")
+        return IMAPKit.fetchedItems(in: responses).first?.sections.first
+    }
+
     func logout() async {
         _ = try? await run("LOGOUT")
         connection.cancel()
@@ -173,7 +193,7 @@ final class IMAPSession: @unchecked Sendable {
 
     private func readUntil(_ isComplete: ([IMAPKit.Response]) -> Bool) async throws -> [IMAPKit.Response] {
         var collected: [IMAPKit.Response] = []
-        let deadline = Date().addingTimeInterval(25)
+        let deadline = Date().addingTimeInterval(60)
         while true {
             let (responses, remainder) = IMAPKit.splitResponses(buffer)
             buffer = remainder
@@ -220,7 +240,7 @@ final class IMAPSession: @unchecked Sendable {
 
     private func receive() async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 262_144) { data, _, isComplete, error in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1_048_576) { data, _, isComplete, error in
                 if let error {
                     continuation.resume(throwing: error)
                 } else if let data, !data.isEmpty {

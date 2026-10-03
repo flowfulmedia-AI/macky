@@ -165,6 +165,21 @@ public enum GmailAPI {
         return components.url!
     }
 
+    /// The whole message (RFC 822) with its attachments, as Gmail's "raw" format.
+    public static func rawMessageURL(identifier: String) -> URL {
+        var components = URLComponents(string: "\(base)/\(identifier)")!
+        components.queryItems = [URLQueryItem(name: "format", value: "raw")]
+        return components.url!
+    }
+
+    /// The "raw" field is base64url without padding.
+    public static func parseRawMessage(_ data: Data) -> Data? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let raw = json["raw"] as? String else { return nil }
+        var base64 = raw.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
+    }
+
     public static func parseMessageIdentifiers(_ data: Data) -> [String] {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let messages = json["messages"] as? [[String: Any]] else { return [] }

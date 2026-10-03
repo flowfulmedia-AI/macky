@@ -49,6 +49,7 @@ final class CompanionSession: ObservableObject {
     let whatsAppController: WhatsAppController
     let chatArchiveStore = ChatArchiveStore()
     let mailAccountsStore = MailAccountsStore()
+    private lazy var emailAttachmentSaver = EmailAttachmentSaver(googleAccountManager: googleAccountManager, mailAccountsStore: mailAccountsStore)
     /// Set by the app once created; lets the user start their agents by voice.
     var agentStore: AgentStore?
     /// The routine being run, if the current request is one.
@@ -92,7 +93,7 @@ final class CompanionSession: ObservableObject {
     private var listeningStartDate: Date?
     private static let maximumPointingSteps = 5
     /// Upper bound on model round trips for one question when Macky acts on the computer.
-    private static let maximumAgentSteps = 8
+    private static let maximumAgentSteps = 12
 
     init(settings: AppSettings, apiKeyStore: OpenRouterAPIKeyStore, modelCatalogStore: ModelCatalogStore,
          overlayController: CompanionOverlayController, drawingOverlayController: DrawingOverlayController,
@@ -981,7 +982,7 @@ final class CompanionSession: ObservableObject {
         if useToolCalling {
             tools += MackyTool.informationTools.filter { tool in
                 if tool == .useSkill { return !skills.isEmpty }
-                if tool == .searchGmail || tool == .readEmail {
+                if tool == .searchGmail || tool == .readEmail || tool == .saveEmailAttachments {
                     return googleAccountManager.isConnected || !googleAccountManager.additionalGmailAddresses.isEmpty || mailAccountsStore.hasAccounts
                 }
                 if MackyTool.googleTools.contains(tool) { return googleAccountManager.isConnected }
@@ -1387,6 +1388,12 @@ final class CompanionSession: ObservableObject {
                 return .done(action.userFacingDescription, resultDetail: await mailAccountsStore.read(identifier: identifier))
             }
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.readEmail(identifier: identifier))
+        case .saveEmailAttachments(let identifiers, let folder, let savesEmailWithoutAttachment):
+            let report = await emailAttachmentSaver.save(identifiers: identifiers, folder: folder,
+                                                         savesEmailWithoutAttachment: savesEmailWithoutAttachment) { [weak self] text in
+                self?.overlayController.setBubbleText(text)
+            }
+            return .done(action.userFacingDescription, resultDetail: report)
         case .searchDrive(let query):
             overlayController.setBubbleText("Caut în Google Drive…")
             return .done(action.userFacingDescription, resultDetail: await googleAccountManager.searchDrive(query: query))
@@ -1480,6 +1487,8 @@ final class CompanionSession: ObservableObject {
         if case .startBackgroundTask = action { needsConfirmation = false }
         // Replacing selected text is what the user just asked for, and ⌘Z undoes it.
         if case .replaceSelection = action { needsConfirmation = false }
+        // Saving files into a folder of Downloads only adds files.
+        if case .saveEmailAttachments = action { needsConfirmation = false }
         if settings.actionMode == .askFirst && !areActionsApprovedForCurrentQuestion && needsConfirmation {
             let answer = await actionConfirmationController.requestConfirmation(
                 actionDescription: action.userFacingDescription,
@@ -1547,7 +1556,7 @@ final class CompanionSession: ObservableObject {
             return .done(action.userFacingDescription, resultDetail: "The background agent started. It will report when it is done; tell the user briefly.")
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog:
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog, .saveEmailAttachments:
             break
         case .whatsAppSend(let recipient, let text):
             do {

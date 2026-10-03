@@ -433,6 +433,20 @@ final class GoogleAccountManager: ObservableObject {
         }
     }
 
+    /// The whole email with its attachments, for saving them.
+    func rawEmail(identifier: String) async throws -> Data {
+        var account: String?
+        var messageIdentifier = identifier
+        if identifier.hasPrefix("gmail:"), let hash = identifier.lastIndex(of: "#") {
+            account = String(identifier[identifier.index(identifier.startIndex, offsetBy: 6)..<hash])
+            messageIdentifier = String(identifier[identifier.index(after: hash)...])
+        }
+        guard let raw = GmailAPI.parseRawMessage(try await authorizedData(from: GmailAPI.rawMessageURL(identifier: messageIdentifier), account: account)) else {
+            throw GoogleOAuth.OAuthError(message: "Gmail nu a trimis emailul.")
+        }
+        return raw
+    }
+
     // MARK: Drive
 
     func searchDrive(query: String) async -> String {

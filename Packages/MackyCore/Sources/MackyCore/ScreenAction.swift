@@ -57,6 +57,7 @@ public enum ScreenAction: Equatable, Sendable {
     case readPastChat(title: String)
     case runAgent(name: String, request: String?)
     case readErrorLog
+    case saveEmailAttachments(identifiers: [String], folder: String, savesEmailWithoutAttachment: Bool)
     /// A tool of a connected app (MCP server), e.g. creating a task in the user's own app.
     case externalTool(serverName: String, toolName: String, argumentsJSON: String, needsConfirmation: Bool)
 
@@ -158,11 +159,19 @@ public enum ScreenAction: Equatable, Sendable {
             self = .openFile(path: path)
         case .searchGmail:
             guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
-            self = .searchGmail(query: query, maximumResults: min(max(OpenRouterStreamDecoder.integerValue(arguments["max_results"]) ?? 10, 1), 25),
+            self = .searchGmail(query: query, maximumResults: min(max(OpenRouterStreamDecoder.integerValue(arguments["max_results"]) ?? 10, 1), 50),
                                 account: Self.nonEmptyString(arguments["account"]))
         case .readEmail:
             guard let identifier = Self.nonEmptyString(arguments["id"]) else { return nil }
             self = .readEmail(identifier: identifier)
+        case .saveEmailAttachments:
+            var identifiers = (arguments["ids"] as? [Any])?.compactMap { Self.nonEmptyString($0) } ?? []
+            if identifiers.isEmpty, let text = Self.nonEmptyString(arguments["ids"]) ?? Self.nonEmptyString(arguments["id"]) {
+                identifiers = text.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init)
+            }
+            guard !identifiers.isEmpty, let folder = Self.nonEmptyString(arguments["folder"]) else { return nil }
+            self = .saveEmailAttachments(identifiers: identifiers, folder: folder,
+                                         savesEmailWithoutAttachment: (arguments["save_email_if_no_attachment"] as? Bool) ?? true)
         case .searchDrive:
             guard let query = Self.nonEmptyString(arguments["query"]) else { return nil }
             self = .searchDrive(query: query)
@@ -262,6 +271,8 @@ public enum ScreenAction: Equatable, Sendable {
             return "Caută în email" + (account.map { " (\($0))" } ?? "") + ": \(query)"
         case .readEmail:
             return "Citește un email"
+        case .saveEmailAttachments(let identifiers, let folder, _):
+            return "Salvează atașamentele din \(identifiers.count) email\(identifiers.count == 1 ? "" : "uri") în „\((folder as NSString).lastPathComponent)”"
         case .searchDrive(let query):
             return "Caută în Google Drive: \(query)"
         case .readDriveFile:
@@ -310,7 +321,8 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .remember, .forget, .recall, .useSkill, .webSearch, .fetchURL,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent, .readErrorLog: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .whatsAppSend, .searchPastChats, .readPastChat, .runAgent, .readErrorLog,
+             .saveEmailAttachments: return true
         default: return false
         }
     }
@@ -320,7 +332,7 @@ public enum ScreenAction: Equatable, Sendable {
         switch self {
         case .recall, .useSkill, .webSearch, .fetchURL, .listEvents, .listReminders,
              .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile, .externalTool,
-             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat: return true
+             .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .saveEmailAttachments: return true
         default: return false
         }
     }

@@ -9,6 +9,11 @@ final class IMAPTests: XCTestCase {
         XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: "subject:\"oferta nouă\" after:2026/09/01 in:inbox"),
                        "SUBJECT \"oferta nouă\" SINCE 01-Sep-2026")
         XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: ""), "ALL")
+        XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: "factura canva"), "TEXT \"factura\" TEXT \"canva\"")
+        XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: "from:(canva OR openai OR zoom) has:attachment after:2026/09/01", now: now),
+                       "OR OR FROM \"canva\" FROM \"openai\" FROM \"zoom\" SINCE 01-Sep-2026")
+        XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: "{invoice receipt factura}"),
+                       "OR OR TEXT \"invoice\" TEXT \"receipt\" TEXT \"factura\"")
         XCTAssertEqual(IMAPKit.quoted("a\"b\\c"), "\"a\\\"b\\\\c\"")
     }
 

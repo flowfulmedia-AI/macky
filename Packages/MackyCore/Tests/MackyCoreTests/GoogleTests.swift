@@ -69,8 +69,8 @@ final class GoogleTests: XCTestCase {
 
     func testEntitiesAndTools() {
         XCTAssertEqual(HTMLTextExtractor.decodeEntities("a &amp;lt; b &#39;c&#x219;"), "a &lt; b 'cș")
-        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "1", name: "search_gmail", argumentsJSON: #"{"query":"from:ioana","max_results":50}"#)),
-                       .searchGmail(query: "from:ioana", maximumResults: 25))
+        XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "1", name: "search_gmail", argumentsJSON: #"{"query":"from:ioana","max_results":80}"#)),
+                       .searchGmail(query: "from:ioana", maximumResults: 50))
         XCTAssertEqual(ScreenAction(toolCall: ChatToolCall(identifier: "2", name: "search_files", argumentsJSON: #"{"query":"contract"}"#)),
                        .searchFiles(query: "contract", kind: "any"))
         XCTAssertEqual(ScreenAction.openFile(path: "/a").isReadOnly, false)

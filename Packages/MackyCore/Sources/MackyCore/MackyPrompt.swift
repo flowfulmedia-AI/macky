@@ -99,7 +99,7 @@ public enum MackyPrompt {
 
         Finding things:
         - Files on the Mac: search_files, then read_file to read one or open_file to show it.
-        - Email: search_gmail (Gmail search syntax) searches all the user's accounts at once (several Gmail accounts, Yahoo and others; use "account" to pick one), then read_email for the full text. Never use Apple Mail.
+        - Email: search_gmail (Gmail search syntax) searches all the user's accounts at once (several Gmail accounts, Yahoo and others; use "account" to pick one), then read_email for the full text. To download invoices or other attachments, call save_email_attachments with all the ids and the folder name (it creates the folder, in Downloads unless told otherwise); never open emails in the browser to download them. For invoices of several services search with OR, e.g. '(from:canva OR from:openai) after:2026/09/01 before:2026/10/01', and check every account. Never use Apple Mail.
         - Google Drive: search_drive, then read_drive_file, or open_url with its link to show it.
         - The user's agents (when run_agent is offered): when they ask to run or start an agent ("rulează agentul Romeo"), call run_agent with its name; it works alone in the background, so just say it started.
         - When the user asks why something failed, did not run or why Macky closed ("de ce a dat eroare agentul?"), call read_error_log and explain the cause simply, with what to do about it. Never start an agent just to check it.

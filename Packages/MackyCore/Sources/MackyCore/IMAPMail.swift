@@ -85,39 +85,82 @@ public enum IMAPKit {
     /// Translates the Gmail-style queries Macky's model writes ("from:andrei is:unread newer_than:2d factura")
     /// into IMAP SEARCH criteria. Unknown operators become plain text searches.
     public static func searchCriteria(fromGmailQuery query: String, now: Date = Date()) -> String {
+        // Each token becomes one criterion; "a OR b" becomes IMAP's prefix form "OR a b".
         var criteria: [String] = []
-        var freeWords: [String] = []
-        for token in tokenize(query) {
-            let lowered = token.lowercased()
-            func value(after prefix: String) -> String { String(token.dropFirst(prefix.count)) }
-            if lowered.hasPrefix("from:") {
-                criteria.append("FROM " + quoted(value(after: "from:")))
-            } else if lowered.hasPrefix("to:") {
-                criteria.append("TO " + quoted(value(after: "to:")))
-            } else if lowered.hasPrefix("subject:") {
-                criteria.append("SUBJECT " + quoted(value(after: "subject:")))
-            } else if lowered == "is:unread" {
-                criteria.append("UNSEEN")
-            } else if lowered == "is:read" {
-                criteria.append("SEEN")
-            } else if lowered == "is:starred" {
-                criteria.append("FLAGGED")
-            } else if lowered.hasPrefix("newer_than:"), let since = sinceDate(value(after: "newer_than:"), now: now) {
-                criteria.append("SINCE " + since)
-            } else if lowered.hasPrefix("after:"), let date = slashDate(value(after: "after:")) {
-                criteria.append("SINCE " + date)
-            } else if lowered.hasPrefix("before:"), let date = slashDate(value(after: "before:")) {
-                criteria.append("BEFORE " + date)
-            } else if lowered.hasPrefix("in:") || lowered.hasPrefix("label:") || lowered.hasPrefix("category:") || lowered.hasPrefix("has:") {
+        var pendingOr = false
+        for token in tokenize(expandGroups(query)) {
+            if token == "OR" || token == "|" {
+                pendingOr = !criteria.isEmpty
                 continue
-            } else {
-                freeWords.append(token)
             }
-        }
-        if !freeWords.isEmpty {
-            criteria.append("TEXT " + quoted(freeWords.joined(separator: " ")))
+            guard let criterion = criterion(for: token, now: now) else { continue }
+            if pendingOr, let previous = criteria.popLast() {
+                criteria.append("OR \(previous) \(criterion)")
+            } else {
+                criteria.append(criterion)
+            }
+            pendingOr = false
         }
         return criteria.isEmpty ? "ALL" : criteria.joined(separator: " ")
+    }
+
+    private static func criterion(for token: String, now: Date) -> String? {
+        let lowered = token.lowercased()
+        func value(after prefix: String) -> String { String(token.dropFirst(prefix.count)) }
+        if lowered.hasPrefix("from:") {
+            return "FROM " + quoted(value(after: "from:"))
+        } else if lowered.hasPrefix("to:") {
+            return "TO " + quoted(value(after: "to:"))
+        } else if lowered.hasPrefix("subject:") {
+            return "SUBJECT " + quoted(value(after: "subject:"))
+        } else if lowered == "is:unread" {
+            return "UNSEEN"
+        } else if lowered == "is:read" {
+            return "SEEN"
+        } else if lowered == "is:starred" {
+            return "FLAGGED"
+        } else if lowered.hasPrefix("newer_than:") {
+            return sinceDate(value(after: "newer_than:"), now: now).map { "SINCE " + $0 }
+        } else if lowered.hasPrefix("after:") {
+            return slashDate(value(after: "after:")).map { "SINCE " + $0 }
+        } else if lowered.hasPrefix("before:") {
+            return slashDate(value(after: "before:")).map { "BEFORE " + $0 }
+        } else if lowered.hasPrefix("in:") || lowered.hasPrefix("label:") || lowered.hasPrefix("category:") || lowered.hasPrefix("has:")
+                    || lowered.hasPrefix("filename:") || lowered.hasPrefix("larger:") || lowered.hasPrefix("smaller:") {
+            return nil
+        }
+        return "TEXT " + quoted(token)
+    }
+
+    /// "from:(canva OR openai)" → "from:canva OR from:openai"; other parentheses and braces are dropped
+    /// ({a b} is Gmail's "any of", so its words are joined with OR).
+    static func expandGroups(_ query: String) -> String {
+        var result = query
+        if let expression = try? NSRegularExpression(pattern: "([A-Za-z_]+):[(]([^)]*)[)]") {
+            let nsText = result as NSString
+            var rebuilt = ""
+            var lastEnd = 0
+            for match in expression.matches(in: result, range: NSRange(location: 0, length: nsText.length)) {
+                rebuilt += nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                let operatorName = nsText.substring(with: match.range(at: 1))
+                let words = nsText.substring(with: match.range(at: 2)).split(separator: " ").filter { $0 != "OR" && $0 != "|" }
+                rebuilt += words.map { "\(operatorName):\($0)" }.joined(separator: " OR ")
+                lastEnd = match.range.location + match.range.length
+            }
+            result = rebuilt + nsText.substring(from: lastEnd)
+        }
+        if let expression = try? NSRegularExpression(pattern: "[{]([^}]*)[}]") {
+            let nsText = result as NSString
+            var rebuilt = ""
+            var lastEnd = 0
+            for match in expression.matches(in: result, range: NSRange(location: 0, length: nsText.length)) {
+                rebuilt += nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                rebuilt += nsText.substring(with: match.range(at: 1)).split(separator: " ").joined(separator: " OR ")
+                lastEnd = match.range.location + match.range.length
+            }
+            result = rebuilt + nsText.substring(from: lastEnd)
+        }
+        return result.replacingOccurrences(of: "(", with: " ").replacingOccurrences(of: ")", with: " ")
     }
 
     /// Splits on spaces but keeps "quoted phrases" and from:"Ana Pop" together.

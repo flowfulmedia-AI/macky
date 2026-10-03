@@ -39,6 +39,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     case openFile = "open_file"
     case searchGmail = "search_gmail"
     case readEmail = "read_email"
+    case saveEmailAttachments = "save_email_attachments"
     case searchDrive = "search_drive"
     case readDriveFile = "read_drive_file"
     // WhatsApp through the Mac app.
@@ -69,7 +70,7 @@ public enum MackyTool: String, CaseIterable, Sendable {
     public static let memoryTools: [MackyTool] = [.remember, .forget, .recall]
     /// Tools that only fetch information (web, skills); offered whenever tools are.
     public static let informationTools: [MackyTool] = [
-        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .searchDrive, .readDriveFile,
+        .webSearch, .fetchURL, .useSkill, .searchFiles, .readFile, .searchGmail, .readEmail, .saveEmailAttachments, .searchDrive, .readDriveFile,
         .whatsAppChats, .whatsAppRead, .whatsAppSearch, .searchPastChats, .readPastChat, .runAgent, .readErrorLog
     ]
     /// Need an imported Claude or ChatGPT export.
@@ -315,7 +316,7 @@ public enum OpenRouterRequestBuilder {
                 + "Returns id, account, date, sender, subject (and a snippet for Gmail) for each email."
             properties = [
                 "query": ["type": "string"],
-                "max_results": ["type": "integer", "description": "Per account. Default 10, at most 25."],
+                "max_results": ["type": "integer", "description": "Per account. Default 10, at most 50."],
                 "account": ["type": "string", "description": "Optional: only this account, by email address or a clear part of it (e.g. 'yahoo')."]
             ]
             required = ["query"]
@@ -323,6 +324,16 @@ public enum OpenRouterRequestBuilder {
             description = "Reads one email in full, by the id from search_gmail (any account)."
             properties = ["id": ["type": "string"]]
             required = ["id"]
+        case .saveEmailAttachments:
+            description = "Downloads the attachments (invoices, PDFs, documents) of one or more emails from any connected account into a folder on the Mac, "
+                + "creating the folder if needed. An email without attachments (e.g. a receipt written in the email itself) is saved as a PDF of the email. "
+                + "Use the ids from search_gmail; pass all the emails at once."
+            properties = [
+                "ids": ["type": "array", "items": ["type": "string"], "description": "Email ids from search_gmail."],
+                "folder": ["type": "string", "description": "Folder name or path, e.g. 'Facturi octombrie 2026' (goes in Downloads), or 'Documents/Firma/Facturi'."],
+                "save_email_if_no_attachment": ["type": "boolean", "description": "Default true: keep an email without attachments as a PDF."]
+            ]
+            required = ["ids", "folder"]
         case .searchDrive:
             description = "Searches the user's Google Drive (read-only) by file name and content. Returns id, name, type, date and link."
             properties = ["query": ["type": "string", "description": "Words to find, e.g. 'contract Nordic'."]]

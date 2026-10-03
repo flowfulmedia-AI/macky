@@ -93,7 +93,9 @@ public enum IMAPKit {
                 pendingOr = !criteria.isEmpty
                 continue
             }
-            guard let criterion = criterion(for: token, now: now) else { continue }
+            let negated = token.hasPrefix("-") && token.count > 1
+            guard var criterion = criterion(for: negated ? String(token.dropFirst()) : token, now: now) else { continue }
+            if negated { criterion = "NOT " + criterion }
             if pendingOr, let previous = criteria.popLast() {
                 criteria.append("OR \(previous) \(criterion)")
             } else {

@@ -337,12 +337,14 @@ public enum OpenRouterRequestBuilder {
             required = ["ids", "folder"]
         case .collectInvoices:
             description = "Collects a month's invoices and receipts for a list of services from ALL connected email accounts in one go: "
-                + "searches each service, saves every invoice (attachments, or the email as PDF) into the folder (created if needed) "
+                + "finds only real bills sent by each service, saves them into the folder (created if needed) named 'Factura Service (SEP 2026)', "
                 + "and writes a summary file there (service, date, subject, amount, file). Use it for any 'download my invoices' request."
             properties = [
                 "services": ["type": "array", "items": ["type": "string"], "description": "Service names as the user wrote them, e.g. 'Apple (iCloud / App Store)', 'Canva'."],
                 "month": ["type": "string", "description": "The month, e.g. '2026-09'."],
-                "folder": ["type": "string", "description": "Folder name or path, e.g. 'FACTURI - Septembrie 2026' (goes in Downloads)."]
+                "folder": ["type": "string", "description": "Folder name or path, e.g. 'FACTURI - Septembrie 2026' (goes in Downloads)."],
+                "file_name_template": ["type": "string", "description": "Optional name for each file, with {serviciu}, {LUNA} (SEP), {Luna} (Septembrie), {AN}. "
+                    + "Default 'Factura {serviciu} ({LUNA} {AN})'. Only if the user asked for another naming."]
             ]
             required = ["services", "month", "folder"]
         case .searchDrive:

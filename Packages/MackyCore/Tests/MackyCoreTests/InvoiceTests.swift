@@ -21,12 +21,45 @@ final class InvoiceTests: XCTestCase {
 
     func testQueryWorksForGmailAndIMAP() throws {
         let range = try XCTUnwrap(InvoiceKit.monthRange("2026-09", calendar: utc))
-        let query = InvoiceKit.query(service: "Apple (App Store)", start: range.start, end: range.end, calendar: utc)
-        XCTAssertTrue(query.hasPrefix("{from:apple subject:apple \"app store\"} {invoice receipt"))
-        XCTAssertTrue(query.hasSuffix("after:2026/09/01 before:2026/10/01"))
+        let query = InvoiceKit.query(service: "Apple (iCloud / App Store)", start: range.start, end: range.end, calendar: utc)
+        XCTAssertEqual(query, "from:(apple) subject:(invoice OR receipt OR factura OR factură OR facturi OR chitanta OR chitanță) after:2026/09/01 before:2026/10/01")
         let imap = IMAPKit.searchCriteria(fromGmailQuery: query)
-        XCTAssertTrue(imap.hasPrefix("OR OR FROM \"apple\" SUBJECT \"apple\" TEXT \"app store\""), imap)
+        XCTAssertTrue(imap.hasPrefix("FROM \"apple\" OR OR OR OR OR OR SUBJECT \"invoice\" SUBJECT \"receipt\""), imap)
         XCTAssertTrue(imap.hasSuffix("SINCE 01-Sep-2026 BEFORE 01-Oct-2026"), imap)
+        let googleOne = InvoiceKit.query(service: "Google One", start: range.start, end: range.end, calendar: utc)
+        XCTAssertTrue(googleOne.hasPrefix("from:(google) \"google one\" subject:("), googleOne)
+        XCTAssertEqual(IMAPKit.searchCriteria(fromGmailQuery: "from:canva -subject:newsletter"), "FROM \"canva\" NOT SUBJECT \"newsletter\"")
+    }
+
+    func testOnlyRealBillsPass() {
+        let apple = InvoiceKit.profile(for: "Apple (iCloud / App Store)")
+        XCTAssertEqual(apple.displayName, "Apple")
+        XCTAssertTrue(InvoiceKit.isInvoice(from: "Apple <no_reply@email.apple.com>", subject: "Your receipt from Apple.", attachmentNames: [], text: "", profile: apple))
+        // Mentions Apple but is not from Apple, or is from Apple but not a bill.
+        XCTAssertFalse(InvoiceKit.isInvoice(from: "Newsletter <news@shop.ro>", subject: "Apple receipt deals", attachmentNames: [], text: "", profile: apple))
+        XCTAssertFalse(InvoiceKit.isInvoice(from: "Apple <news@insideapple.apple.com>", subject: "Meet the new iPhone", attachmentNames: [], text: "", profile: apple))
+
+        let lovable = InvoiceKit.profile(for: "Lovable")
+        XCTAssertTrue(InvoiceKit.isInvoice(from: "Lovable <invoice+statements@stripe.com>", subject: "Your Lovable payment",
+                                           attachmentNames: ["Invoice-1234.pdf"], text: "", profile: lovable))
+        XCTAssertFalse(InvoiceKit.isInvoice(from: "Ana <ana@gmail.com>", subject: "Factura Lovable", attachmentNames: [], text: "", profile: lovable))
+
+        let captions = InvoiceKit.profile(for: "Captions.ai")
+        XCTAssertEqual(captions.searchWords, ["captions"])
+
+        let zoom = InvoiceKit.profile(for: "Zoom")
+        XCTAssertFalse(InvoiceKit.isInvoice(from: "Ion <ion@firma.ro>", subject: "Invoice pentru meetingul pe Zoom", attachmentNames: [], text: "", profile: zoom))
+        XCTAssertTrue(InvoiceKit.isInvoice(from: "Zoom <billing@zoom.us>", subject: "Zoom Invoice", attachmentNames: [], text: "", profile: zoom))
+
+        let googleOne = InvoiceKit.profile(for: "Google One")
+        XCTAssertFalse(InvoiceKit.isInvoice(from: "Google Play <googleplay-noreply@google.com>", subject: "Your Google Play order receipt", attachmentNames: [], text: "YouTube Premium", profile: googleOne))
+        XCTAssertTrue(InvoiceKit.isInvoice(from: "Google Play <googleplay-noreply@google.com>", subject: "Your Google Play order receipt", attachmentNames: [], text: "Google One 100 GB", profile: googleOne))
+    }
+
+    func testFileNames() {
+        let date = utc.date(from: DateComponents(year: 2026, month: 9, day: 14))!
+        XCTAssertEqual(InvoiceKit.fileName(template: "", service: "Lovable", date: date, calendar: utc), "Factura Lovable (SEP 2026)")
+        XCTAssertEqual(InvoiceKit.fileName(template: "{AN}-{luna} {serviciu}/{Luna}", service: "Canva", date: date, calendar: utc), "2026-sep Canva Septembrie")
     }
 
     func testIdentifiersAndAmounts() {

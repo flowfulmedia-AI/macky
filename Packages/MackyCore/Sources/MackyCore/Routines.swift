@@ -7,22 +7,32 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     public var minute: Int
     /// Calendar weekday numbers: 1 = Sunday, 2 = Monday … 7 = Saturday.
     public var weekdays: Set<Int>
+    /// Set for a monthly schedule: that day of every month (31 means the month's last day); weekdays are ignored.
+    public var dayOfMonth: Int?
 
     public static let workdays: Set<Int> = [2, 3, 4, 5, 6]
     public static let everyDay: Set<Int> = [1, 2, 3, 4, 5, 6, 7]
 
-    public init(isEnabled: Bool, hour: Int, minute: Int, weekdays: Set<Int>) {
+    public init(isEnabled: Bool, hour: Int, minute: Int, weekdays: Set<Int>, dayOfMonth: Int? = nil) {
         self.isEnabled = isEnabled
         self.hour = hour
         self.minute = minute
         self.weekdays = weekdays
+        self.dayOfMonth = dayOfMonth
     }
 
-    /// The latest scheduled moment at or before `now` (today or an earlier day), if any in the last week.
+    /// Whether the schedule runs on this day.
+    func runs(on day: Date, calendar: Calendar) -> Bool {
+        guard let dayOfMonth else { return weekdays.contains(calendar.component(.weekday, from: day)) }
+        let daysInMonth = calendar.range(of: .day, in: .month, for: day)?.count ?? 31
+        return calendar.component(.day, from: day) == min(max(dayOfMonth, 1), daysInMonth)
+    }
+
+    /// The latest scheduled moment at or before `now` (today or an earlier day), if any in the last week (or month).
     public func mostRecentOccurrence(atOrBefore now: Date, calendar: Calendar = .current) -> Date? {
-        for daysBack in 0...7 {
+        for daysBack in 0...(dayOfMonth == nil ? 7 : 31) {
             guard let day = calendar.date(byAdding: .day, value: -daysBack, to: now),
-                  weekdays.contains(calendar.component(.weekday, from: day)),
+                  runs(on: day, calendar: calendar),
                   let occurrence = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
                   occurrence <= now else { continue }
             return occurrence
@@ -33,13 +43,18 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// Due when a scheduled time passed since the last run, within a grace period
     /// (the Mac may have been asleep at 9:00; at 9:20 the brief is still useful, at 15:00 it is not).
     public func isDue(now: Date, lastRunAt: Date?, gracePeriod: TimeInterval = 2 * 3600, calendar: Calendar = .current) -> Bool {
+        // A monthly job missed because the Mac was off still runs in the next three days.
+        let allowedDelay = dayOfMonth == nil ? gracePeriod : max(gracePeriod, 3 * 86_400)
         guard isEnabled, let occurrence = mostRecentOccurrence(atOrBefore: now, calendar: calendar),
-              now.timeIntervalSince(occurrence) <= gracePeriod else { return false }
+              now.timeIntervalSince(occurrence) <= allowedDelay else { return false }
         guard let lastRunAt else { return true }
         return lastRunAt < occurrence
     }
 
     public var shortDescription: String {
+        if let dayOfMonth {
+            return String(format: "lunar, pe %@, la %02d:%02d", dayOfMonth >= 31 ? "ultima zi" : "\(dayOfMonth)", hour, minute)
+        }
         let names = [1: "Du", 2: "Lu", 3: "Ma", 4: "Mi", 5: "Jo", 6: "Vi", 7: "Sâ"]
         let days: String
         if weekdays == Self.everyDay {

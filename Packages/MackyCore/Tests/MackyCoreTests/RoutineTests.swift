@@ -59,4 +59,24 @@ final class RoutineTests: XCTestCase {
         XCTAssertTrue(routine.requestText.contains("Brief de dimineață"))
         XCTAssertTrue(routine.requestText.contains("mailurile importante"))
     }
+
+    func testMonthlySchedule() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let schedule = RoutineSchedule(isEnabled: true, hour: 9, minute: 0, weekdays: [], dayOfMonth: 1)
+        func date(_ month: Int, _ day: Int, _ hour: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour))! }
+        XCTAssertTrue(schedule.isDue(now: date(10, 1, 9), lastRunAt: date(9, 1, 9), calendar: calendar))
+        XCTAssertFalse(schedule.isDue(now: date(10, 1, 8), lastRunAt: date(9, 1, 9), calendar: calendar))
+        // The Mac was off on the 1st: still runs on the 3rd, not on the 10th.
+        XCTAssertTrue(schedule.isDue(now: date(10, 3, 12), lastRunAt: date(9, 1, 9), calendar: calendar))
+        XCTAssertFalse(schedule.isDue(now: date(10, 10, 12), lastRunAt: date(9, 1, 9), calendar: calendar))
+        XCTAssertFalse(schedule.isDue(now: date(10, 2, 12), lastRunAt: date(10, 1, 9), calendar: calendar))
+        // "Last day" in a 30-day month.
+        let lastDay = RoutineSchedule(isEnabled: true, hour: 9, minute: 0, weekdays: [], dayOfMonth: 31)
+        XCTAssertTrue(lastDay.isDue(now: date(9, 30, 10), lastRunAt: nil, calendar: calendar))
+        XCTAssertEqual(schedule.shortDescription, "lunar, pe 1, la 09:00")
+        // Saved routines without the new field still load.
+        let old = try JSONDecoder().decode(RoutineSchedule.self, from: Data(#"{"isEnabled":true,"hour":9,"minute":0,"weekdays":[2]}"#.utf8))
+        XCTAssertNil(old.dayOfMonth)
+    }
 }

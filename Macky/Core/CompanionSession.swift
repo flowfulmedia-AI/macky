@@ -1397,8 +1397,9 @@ final class CompanionSession: ObservableObject {
                 self?.overlayController.setBubbleText(text)
             }
             return .done(action.userFacingDescription, resultDetail: report)
-        case .collectInvoices(let services, let month, let folder):
-            let report = await emailAttachmentSaver.collectInvoices(services: services, month: month, folder: folder) { [weak self] text in
+        case .collectInvoices(let services, let month, let folder, let fileNameTemplate):
+            let report = await emailAttachmentSaver.collectInvoices(services: services, month: month, folder: folder,
+                                                                    fileNameTemplate: fileNameTemplate) { [weak self] text in
                 self?.overlayController.setBubbleText(text)
             }
             return .done(action.userFacingDescription, resultDetail: report)

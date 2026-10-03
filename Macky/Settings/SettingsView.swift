@@ -1526,7 +1526,9 @@ private struct RoutineEditor: View {
                         TextField("fraze separate prin virgulă, ex. brief de dimineață, briefing", text: $phrasesText, onCommit: commit).mackyField()
                     }
                 }
-                SettingsGroup(title: "Pornește singură", footer: draft.schedule.isEnabled ? "Dacă Mac-ul doarme la ora respectivă, rutina pornește când îl trezești (în următoarele 2 ore)." : nil) {
+                SettingsGroup(title: "Pornește singură", footer: draft.schedule.isEnabled ? (draft.schedule.dayOfMonth == nil
+                    ? "Dacă Mac-ul doarme la ora respectivă, rutina pornește când îl trezești (în următoarele 2 ore)."
+                    : "Dacă Mac-ul e închis în ziua respectivă, rutina pornește când îl deschizi (în următoarele 3 zile).") : nil) {
                     SettingsRow(title: "La o oră fixă") {
                         Toggle("", isOn: Binding(get: { draft.schedule.isEnabled }, set: { draft.schedule.isEnabled = $0; commit() })).labelsHidden()
                     }
@@ -1536,6 +1538,25 @@ private struct RoutineEditor: View {
                             DatePicker("", selection: timeBinding, displayedComponents: .hourAndMinute).labelsHidden()
                         }
                         SettingsDivider()
+                        SettingsRow(title: "Se repetă") {
+                            Picker("", selection: Binding(
+                                get: { draft.schedule.dayOfMonth == nil ? 0 : 1 },
+                                set: { draft.schedule.dayOfMonth = $0 == 1 ? (draft.schedule.dayOfMonth ?? 1) : nil; commit() }
+                            )) {
+                                Text("Săptămânal").tag(0)
+                                Text("Lunar").tag(1)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .frame(width: 200)
+                        }
+                        SettingsDivider()
+                        if let dayOfMonth = draft.schedule.dayOfMonth {
+                            SettingsRow(title: dayOfMonth >= 31 ? "În ultima zi a lunii" : "În ziua \(dayOfMonth) a lunii") {
+                                Stepper("", value: Binding(get: { dayOfMonth }, set: { draft.schedule.dayOfMonth = $0; commit() }), in: 1...31)
+                                    .labelsHidden()
+                            }
+                        } else {
                         SettingsBlock {
                             HStack(spacing: 6) {
                                 ForEach([(2, "Lu"), (3, "Ma"), (4, "Mi"), (5, "Jo"), (6, "Vi"), (7, "Sâ"), (1, "Du")], id: \.0) { weekday, name in
@@ -1551,6 +1572,7 @@ private struct RoutineEditor: View {
                                     .background(Capsule().fill(isOn ? AnyShapeStyle(MackyDesign.primaryButtonGradient) : AnyShapeStyle(MackyDesign.surface)))
                                 }
                             }
+                        }
                         }
                     }
                 }

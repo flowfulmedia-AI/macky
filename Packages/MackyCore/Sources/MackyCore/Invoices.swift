@@ -3,9 +3,75 @@ import Foundation
 /// The monthly "collect every invoice" job, done in one go: one search per service across every email account,
 /// then every invoice saved into one folder with a summary file.
 public enum InvoiceKit {
-    /// Words that mark a bill, in English and Romanian.
-    static let invoiceWords = ["invoice", "receipt", "factura", "factură", "chitanta", "chitanță", "bon", "payment", "plata", "plată",
-                               "billing", "subscription", "abonament", "renewal", "charged", "comanda", "order"]
+    /// Words a bill has in its subject (or its PDF's name), in English and Romanian.
+    static let invoiceSubjectWords = ["invoice", "receipt", "factura", "factură", "facturi", "chitanta", "chitanță"]
+
+    /// Who sends a service's bills and how to recognise them.
+    public struct ServiceProfile: Equatable, Sendable {
+        /// "Apple", "Google One": used in file names.
+        public var displayName: String
+        /// Words for Gmail's from: (sender name or address).
+        public var searchWords: [String]
+        /// One of these must be in the sender (name or address) of a real bill.
+        public var senderMarks: [String]
+        /// Text that must appear in the email too (Google sends far more than Google One bills).
+        public var mentions: [String]
+    }
+
+    /// Senders of the common services; other services are recognised by their name.
+    static let knownServices: [(keys: [String], searchWords: [String], senderMarks: [String], mentions: [String])] = [
+        (["apple", "icloud", "app store"], ["apple"], ["apple.com"], []),
+        (["google one"], ["google"], ["google.com"], ["google one"]),
+        (["openai", "chatgpt"], ["openai"], ["openai"], []),
+        (["anthropic", "claude"], ["anthropic"], ["anthropic"], []),
+        (["zoom"], ["zoom"], ["zoom.us", "zoom.com"], []),
+        (["capcut"], ["capcut"], ["capcut"], []),
+        (["microsoft", "office 365", "microsoft 365"], ["microsoft"], ["microsoft"], [])
+    ]
+
+    public static func profile(for service: String) -> ServiceProfile {
+        let names = aliases(for: service)
+        let displayName = names.first ?? service
+        let folded: [String] = names.map { (name: String) -> String in name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        if let known = knownServices.first(where: { entry in entry.keys.contains { key in folded.contains(key) } }) {
+            return ServiceProfile(displayName: displayName, searchWords: known.searchWords, senderMarks: known.senderMarks, mentions: known.mentions)
+        }
+        // "Captions.ai" → "captions", "Lovable" → "lovable".
+        let base = (folded.first ?? service.lowercased())
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: #"\.(ai|com|io|dev|app|co|net|org|ro)$"#, with: "", options: .regularExpression)
+        return ServiceProfile(displayName: displayName, searchWords: [base], senderMarks: [base], mentions: [])
+    }
+
+    /// Whether a found email really is this service's bill: right sender, and a bill by its subject or its PDF's name.
+    public static func isInvoice(from sender: String, subject: String, attachmentNames: [String], text: String, profile: ServiceProfile) -> Bool {
+        func folded(_ value: String) -> String { value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let senderText = folded(sender)
+        guard profile.senderMarks.contains(where: { senderText.contains($0) }) else { return false }
+        let subjectText = folded(subject)
+        let words = invoiceSubjectWords.map(folded)
+        let looksLikeBill = words.contains { subjectText.contains($0) }
+            || attachmentNames.contains { name in words.contains { folded(name).contains($0) } }
+        guard looksLikeBill else { return false }
+        let everything = subjectText + " " + folded(text)
+        return profile.mentions.allSatisfy { everything.contains(folded($0)) }
+    }
+
+    /// "Factura {serviciu} ({LUNA} {AN})" → "Factura Lovable (SEP 2026)". Also {luna} (sep) and {Luna} (Septembrie).
+    public static func fileName(template: String, service: String, date: Date, calendar: Calendar = .current) -> String {
+        let shortNames = ["IAN", "FEB", "MAR", "APR", "MAI", "IUN", "IUL", "AUG", "SEP", "OCT", "NOI", "DEC"]
+        let longNames = ["Ianuarie", "Februarie", "Martie", "Aprilie", "Mai", "Iunie", "Iulie", "August", "Septembrie", "Octombrie", "Noiembrie", "Decembrie"]
+        let month = calendar.component(.month, from: date) - 1
+        let year = String(calendar.component(.year, from: date))
+        var name = template.isEmpty ? defaultFileNameTemplate : template
+        for (placeholder, value) in [("{serviciu}", service), ("{service}", service), ("{LUNA}", shortNames[month]), ("{luna}", shortNames[month].lowercased()),
+                                     ("{Luna}", longNames[month]), ("{AN}", year), ("{an}", year)] {
+            name = name.replacingOccurrences(of: placeholder, with: value)
+        }
+        return EmailFiles.safeFileName(name)
+    }
+
+    public static let defaultFileNameTemplate = "Factura {serviciu} ({LUNA} {AN})"
 
     /// "Apple (iCloud / App Store)" → ["Apple", "iCloud", "App Store"].
     public static func aliases(for service: String) -> [String] {
@@ -35,19 +101,21 @@ public enum InvoiceKit {
         return (start, end)
     }
 
-    /// One Gmail-syntax search for one service's bills in a period (IMAP accounts get it translated).
+    /// One Gmail-syntax search for one service's bills in a period (IMAP accounts get it translated):
+    /// from the service, with a bill word in the subject.
     public static func query(service: String, start: Date, end: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> String {
-        let senders = aliases(for: service).flatMap { alias -> [String] in
-            let word = alias.lowercased()
-            return word.contains(" ") ? ["\"\(word)\""] : ["from:\(word)", "subject:\(word)"]
-        }
+        let profile = profile(for: service)
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy/MM/dd"
-        return "{" + senders.joined(separator: " ") + "} {" + invoiceWords.joined(separator: " ") + "} after:"
-            + formatter.string(from: start) + " before:" + formatter.string(from: end)
+        var parts = ["from:(" + profile.searchWords.joined(separator: " OR ") + ")"]
+        parts += profile.mentions.map { "\"\($0)\"" }
+        parts.append("subject:(" + invoiceSubjectWords.joined(separator: " OR ") + ")")
+        parts.append("after:" + formatter.string(from: start))
+        parts.append("before:" + formatter.string(from: end))
+        return parts.joined(separator: " ")
     }
 
     /// The ids in search result lines ("id=gmail:ana@gmail.com#18c… | …").

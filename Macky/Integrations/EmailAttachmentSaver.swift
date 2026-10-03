@@ -22,6 +22,14 @@ final class EmailAttachmentSaver {
         var files: [String] = []
         var amount: String?
         var error: String?
+        /// Found by the search but not a bill (newsletter, someone mentioning the service…): nothing saved.
+        var wasRejected = false
+    }
+
+    /// For invoices: which emails count and what their files are called.
+    struct InvoiceRules {
+        var accepts: (ParsedEmail) -> Bool
+        var fileName: (ParsedEmail) -> String
     }
 
     /// A report for the model: what was saved where, and which emails failed.
@@ -45,7 +53,8 @@ final class EmailAttachmentSaver {
     }
 
     /// The monthly invoices: one search per service in every account, everything saved, plus a summary file.
-    func collectInvoices(services: [String], month: String, folder requestedFolder: String, progress: (String) -> Void) async -> String {
+    func collectInvoices(services: [String], month: String, folder requestedFolder: String, fileNameTemplate: String?,
+                         progress: (String) -> Void) async -> String {
         guard let period = InvoiceKit.monthRange(month) else {
             return "Could not understand the month \"\(month)\"; use the form 2026-09."
         }
@@ -72,16 +81,30 @@ final class EmailAttachmentSaver {
 
         var entries: [InvoiceKit.SummaryEntry] = []
         var failures: [String] = []
+        var rejected = 0
         let total = identifiersByService.reduce(0) { $0 + $1.identifiers.count }
         var done = 0
         for (service, identifiers) in identifiersByService where !identifiers.isEmpty {
-            let results = await saveEmails(identifiers, into: folderURL, savesEmailWithoutAttachment: true) { _ in
+            let profile = InvoiceKit.profile(for: service)
+            let template = fileNameTemplate ?? InvoiceKit.defaultFileNameTemplate
+            let rules = InvoiceRules(
+                accepts: { email in
+                    InvoiceKit.isInvoice(from: email.from, subject: email.subject, attachmentNames: email.attachments.filter(\.isDocument).map(\.fileName),
+                                         text: HTMLTextExtractor.readableText(fromHTML: email.html), profile: profile)
+                },
+                fileName: { email in
+                    InvoiceKit.fileName(template: template, service: profile.displayName, date: email.date ?? period.start)
+                }
+            )
+            let results = await saveEmails(identifiers, into: folderURL, savesEmailWithoutAttachment: true, invoiceRules: rules) { _ in
                 done += 1
-                progress("Salvez facturile… \(min(done, total))/\(total)")
+                progress("Verific și salvez facturile… \(min(done, total))/\(total)")
             }
             for result in results {
                 if let error = result.error {
                     failures.append("\(service): \(error)")
+                } else if result.wasRejected {
+                    rejected += 1
                 } else if let email = result.email {
                     entries.append(InvoiceKit.SummaryEntry(service: service, date: email.date, subject: email.subject,
                                                            sender: email.from, amount: result.amount, files: result.files))
@@ -93,10 +116,11 @@ final class EmailAttachmentSaver {
         let title = folderURL.lastPathComponent
         let summary = InvoiceKit.summary(title: title, entries: entries, servicesWithoutInvoices: missing)
         let summaryName = write(Data(summary.utf8), named: "Rezumat facturi.txt", in: folderURL)
-        ActivityLog.note("Facturi salvate: \(entries.count), lipsă: \(missing.joined(separator: ", "))")
+        ActivityLog.note("Facturi salvate: \(entries.count), respinse: \(rejected), lipsă: \(missing.joined(separator: ", "))")
 
         var report = "Folder: \(folderURL.path)\nSaved \(entries.flatMap(\.files).count) file(s) from \(entries.count) email(s); summary file: \(summaryName).\n"
         report += entries.map { "- \($0.service): \($0.subject)\($0.amount.map { " — " + $0 } ?? "") → \($0.files.joined(separator: ", "))" }.joined(separator: "\n")
+        if rejected > 0 { report += "\nSkipped \(rejected) email(s) that matched the search but are not bills from these services." }
         if !missing.isEmpty { report += "\nNo invoice found for: " + missing.joined(separator: ", ") }
         if !failures.isEmpty { report += "\nFailed: " + failures.joined(separator: "; ") }
         if !searchProblems.isEmpty { report += "\nSearch problems: " + searchProblems.joined(separator: "; ") }
@@ -116,7 +140,7 @@ final class EmailAttachmentSaver {
     }
 
     private func saveEmails(_ identifiers: [String], into folderURL: URL, savesEmailWithoutAttachment: Bool,
-                            progress: (String) -> Void) async -> [SavedEmail] {
+                            invoiceRules: InvoiceRules? = nil, progress: (String) -> Void) async -> [SavedEmail] {
         var results: [SavedEmail] = []
         for (index, identifier) in identifiers.enumerated() {
             progress("Descarc atașamentele… \(index + 1)/\(identifiers.count)")
@@ -130,16 +154,32 @@ final class EmailAttachmentSaver {
                 }
                 let email = EmailFiles.parse(rawMessage: raw)
                 result.email = email
+                if let invoiceRules, !invoiceRules.accepts(email) {
+                    result.wasRejected = true
+                    ActivityLog.note("Nu e factură, sărit: \(email.from) — \(email.subject)")
+                    results.append(result)
+                    continue
+                }
                 result.amount = InvoiceKit.amount(in: HTMLTextExtractor.readableText(fromHTML: email.html))
-                let documents = email.attachments.filter(\.isDocument)
+                // Invoices: PDFs first (a receipt email often also carries a logo or a calendar file).
+                var documents = email.attachments.filter(\.isDocument)
+                if invoiceRules != nil, documents.contains(where: { $0.mimeType == "application/pdf" || $0.fileName.lowercased().hasSuffix(".pdf") }) {
+                    documents = documents.filter { $0.mimeType == "application/pdf" || $0.fileName.lowercased().hasSuffix(".pdf") }
+                }
                 if documents.isEmpty {
                     if savesEmailWithoutAttachment {
                         let pdf = try await Self.pdf(fromHTML: email.html)
-                        result.files.append(write(pdf, named: EmailFiles.documentName(for: email), in: folderURL))
+                        let name = invoiceRules.map { $0.fileName(email) + ".pdf" } ?? EmailFiles.documentName(for: email)
+                        result.files.append(write(pdf, named: name, in: folderURL))
                     }
                 } else {
                     for attachment in documents {
-                        result.files.append(write(attachment.data, named: EmailFiles.safeFileName(attachment.fileName), in: folderURL))
+                        var name = EmailFiles.safeFileName(attachment.fileName)
+                        if let invoiceRules {
+                            let fileExtension = (attachment.fileName as NSString).pathExtension
+                            name = invoiceRules.fileName(email) + (fileExtension.isEmpty ? ".pdf" : "." + fileExtension.lowercased())
+                        }
+                        result.files.append(write(attachment.data, named: name, in: folderURL))
                     }
                 }
             } catch {

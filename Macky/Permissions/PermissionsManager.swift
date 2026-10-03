@@ -125,6 +125,7 @@ final class PermissionsManager: ObservableObject {
         relaunchProcess.executableURL = URL(fileURLWithPath: "/bin/sh")
         relaunchProcess.arguments = ["-c", "sleep 0.7; /usr/bin/open \"\(applicationPath)\""]
         try? relaunchProcess.run()
+        MackyWindowGuard.shared.userRequestedQuit = true
         NSApp.terminate(nil)
     }
 }

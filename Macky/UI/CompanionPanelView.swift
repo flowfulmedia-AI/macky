@@ -270,7 +270,10 @@ struct CompanionPanelView: View {
                 .foregroundColor(MackyDesign.textSecondary)
             footerButton("Calibrare", systemImage: "scope", iconOnly: true, action: openCalibration)
                 .help("Calibrare")
-            footerButton("Ieșire", systemImage: "power", iconOnly: true) { NSApp.terminate(nil) }
+            footerButton("Ieșire", systemImage: "power", iconOnly: true) {
+                MackyWindowGuard.shared.userRequestedQuit = true
+                NSApp.terminate(nil)
+            }
                 .help("Ieșire din Macky")
         }
     }

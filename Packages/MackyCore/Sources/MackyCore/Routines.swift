@@ -124,18 +124,27 @@ public enum RoutineMatcher {
         let spoken = normalize(transcript)
         guard !spoken.isEmpty else { return nil }
         let spokenWordCount = spoken.split(separator: " ").count
+        // "Mi-ai descărcat facturile", "ai făcut brieful?": a question about the routine, not a request to run it
+        // (spoken questions often arrive without a question mark).
+        let soundsLikeQuestion = spoken.split(separator: " ").first.map { questionStarters.contains(String($0)) } ?? false
         for routine in routines where routine.isEnabled {
             for phrase in routine.triggerPhrases.map(normalize) where !phrase.isEmpty {
                 let phraseWordCount = phrase.split(separator: " ").count
                 if spoken == phrase { return routine }
                 // "pornește modul lucru te rog", "Macky, brief de dimineață".
-                if (" " + spoken + " ").contains(" " + phrase + " ") && spokenWordCount <= phraseWordCount + 3 && !spoken.hasSuffix("?") {
+                if (" " + spoken + " ").contains(" " + phrase + " ") && spokenWordCount <= phraseWordCount + 3 && !spoken.hasSuffix("?")
+                    && !(soundsLikeQuestion && !phrase.hasPrefix(spoken.split(separator: " ").first.map(String.init) ?? "")) {
                     return routine
                 }
             }
         }
         return nil
     }
+
+    static let questionStarters: Set<String> = [
+        "ai", "mi-ai", "ti-ai", "ne-ai", "le-ai", "ce", "cand", "cum", "unde", "de", "cat", "cate", "s-a", "a", "e", "este", "sunt", "oare",
+        "did", "have", "has", "what", "when", "why", "how", "where", "is", "was"
+    ]
 
     static func normalize(_ text: String) -> String {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)

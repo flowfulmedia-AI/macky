@@ -629,6 +629,7 @@ final class CompanionSession: ObservableObject {
 
     /// Called once per request, before it is handled.
     private func noteNewRequest(_ question: String) {
+        ActivityLog.note("Cerere: \(question)")
         // "Nu asta…" right after a replayed procedure means the procedure did the wrong thing.
         if let lastReplayedProcedureIdentifier, MemoryCurator.isCorrection(question) {
             memoryManager.recordProcedureFailure(lastReplayedProcedureIdentifier)
@@ -777,6 +778,7 @@ final class CompanionSession: ObservableObject {
     }
 
     private func recordInHistory(question: String, answer: String, actions: [String], route: HistoryEntry.Route) {
+        ActivityLog.note("Răspuns: \(answer.prefix(200))")
         let cost = costTracker.totalCostInCredits - costAtRequestStart
         historyStore.record(HistoryEntry(
             question: question,
@@ -1508,6 +1510,13 @@ final class CompanionSession: ObservableObject {
         }
 
         overlayController.clearPointing()
+        ActivityLog.note("Acțiune: \(action.userFacingDescription)")
+        switch action {
+        case .click, .typeText, .pressKeys, .clickElement, .runAppleScript:
+            await MackyWindowGuard.shared.prepareForInput(clickPoint: clickTarget)
+        default:
+            break
+        }
         switch action {
         case .click(_, let kind):
             if let clickTarget {
@@ -1685,6 +1694,7 @@ final class CompanionSession: ObservableObject {
 
     private func finishInteraction() {
         state = .idle
+        MackyWindowGuard.shared.restoreWindows()
         drawingOverlayController.clear()
         if let interactionTimings {
             lastTimingSummary = interactionTimings.summary(finishedDate: Date())
@@ -1803,6 +1813,7 @@ final class CompanionSession: ObservableObject {
     }
 
     private func fail(with message: String) {
+        ActivityLog.note("Eroare: \(message)")
         ErrorLogStore.shared.record("Comandă", message, details: lastQuestionText.isEmpty ? "" : "Cererea: \(lastQuestionText)")
         state = .failed(message: message)
         lastAnswerText = message

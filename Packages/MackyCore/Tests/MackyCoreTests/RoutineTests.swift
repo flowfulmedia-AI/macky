@@ -45,6 +45,7 @@ final class RoutineTests: XCTestCase {
         XCTAssertEqual(RoutineMatcher.match("Macky, brief de dimineață te rog.", in: routines)?.name, "Brief de dimineață")
         XCTAssertEqual(RoutineMatcher.match("Pornește mod lucru", in: routines)?.name, "Mod lucru")
         XCTAssertNil(RoutineMatcher.match("Ce e un brief de dimineață?", in: routines))
+        XCTAssertNil(RoutineMatcher.match("Mi-ai făcut brief de dimineață", in: routines))
         XCTAssertNil(RoutineMatcher.match("scrie-mi un brief de dimineață pentru echipa de marketing", in: routines))
         var disabled = Routine.workModeExample
         disabled.isEnabled = false
